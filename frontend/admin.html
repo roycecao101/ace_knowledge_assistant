@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Administration · Ace Knowledge Assistant</title>
+  <link rel="stylesheet" href="admin.css">
+  <script src="auth-client.js" defer></script>
+  <script src="admin.js" defer></script>
+  <script src="live-admin.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <section id="access-gate" class="gate" aria-labelledby="gate-title">
+    <span class="brand-icon" aria-hidden="true">✧</span>
+    <p class="eyebrow">ACE FAMILY DENTAL</p>
+    <h1 id="gate-title">Admin access</h1>
+    <p>A separate, secure administrator login is required.</p>
+    <p>Authentication is not connected. Administrative access is unavailable until the Python backend verifies your admin session.</p>
+    <p id="local-help" hidden>For fictional layout inspection on this computer, open <a href="?preview=1">the local preview</a>.</p>
+    <a class="button" data-employee-view href="index.html">Employee View</a>
+  </section>
+  <div id="dashboard" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="admin.html"><span class="brand-icon" aria-hidden="true">✧</span><span><strong>Ace <span>Knowledge</span></strong><small>ADMIN WORKSPACE</small></span></a>
+      <p class="nav-label">MANAGE YOUR WORKSPACE</p>
+      <nav id="navigation" aria-label="Administration"></nav>
+      <div class="sidebar-foot"><span class="status-dot"></span> Local preview only<p>Fictional data. No live connections.</p></div>
+    </aside>
+    <div class="workspace">
+      <header class="header"><span>Workspace <span class="muted">/</span> <strong id="breadcrumb">Overview</strong></span><a class="view-link" data-employee-view href="index.html">Employee View</a><div class="profile"><span class="avatar" aria-hidden="true">DM</span><span><strong>Demo manager</strong><small>Fictional administrator</small></span></div></header>
+      <main id="main" tabindex="-1">
+        <div class="preview-notice"><strong>SYNTHETIC LOCAL PREVIEW</strong><span>No real accounts, documents, credentials, or administrative actions. Nothing is saved.</span></div>
+        <div class="page-heading"><div><p class="eyebrow">ACE FAMILY DENTAL · ADMINISTRATION</p><h1 id="page-title">Overview</h1><p id="page-description" class="muted"></p></div><span class="badge">Preview workspace</span></div>
+        <div id="message" role="status" aria-live="polite"></div>
+        <div id="content"></div>
+        <footer>Ace Family Dental <span>/</span> Better together.<small>Company totals only · No individual question histories</small></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="modal" aria-labelledby="dialog-title"><div id="dialog-content"></div><div class="dialog-footer"><button id="close-dialog" type="button">Close</button></div></dialog>
+  <noscript><p class="gate">JavaScript is required for the isolated dashboard preview. Live administration requires backend authentication.</p></noscript>
+</body>
+</html>

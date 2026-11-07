@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Ace Knowledge Assistant</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-client.js" defer></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="header">
+    <a class="brand" href="./" aria-label="Ace Knowledge Assistant home">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M16 7c-3-3-9-3-10 2-1 4 2 7 3 12 1 5 3 7 4 3l2-6c.4-1 1.6-1 2 0l2 6c1 4 3 2 4-3 1-5 4-8 3-12-1-5-7-5-10-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+      <span><strong>Ace<span class="brand-light"> Knowledge Assistant</span></strong><small>ACE FAMILY DENTAL</small></span>
+    </a>
+    <div class="header-controls">
+      <a id="admin-dashboard-link" class="view-link" href="admin.html" hidden>Admin Dashboard</a>
+      <label class="office-control"><span class="field-caption">YOUR OFFICE</span><select id="office"><option value="Alpharetta">Alpharetta</option><option value="Norcross">Norcross</option><option value="Lilburn">Lilburn</option></select></label>
+      <div class="profile"><span class="avatar" aria-hidden="true">AE</span><span><strong id="employee-name">Ace employee</strong><small id="auth-status">Authentication not connected</small></span></div>
+      <button id="logout" class="logout" type="button" disabled title="Available when authentication is connected">Logout <span aria-hidden="true">↗</span></button>
+    </div>
+  </header>
+  <main id="main" class="workspace">
+    <div class="page-top"><div class="breadcrumb">Workspace <span>/</span> <strong>Knowledge library</strong></div><span class="private-label"><span aria-hidden="true">◈</span> Internal employee resource</span></div>
+    <section class="hero" aria-labelledby="page-title">
+      <div class="eyebrow"><span></span> YOUR TEAM’S KNOWLEDGE, CONNECTED</div>
+      <h1 id="page-title">Find verified<br>policy information<span>.</span></h1>
+      <p class="intro">Less time searching. More time caring.<br class="mobile-break"> Find answers from Ace’s approved company documents.</p>
+      <form id="search-form" class="search-panel">
+        <div class="search-toolbar"><label for="question">What would you like to know?</label><label class="category-control" for="category"><span class="sr-only">Document category</span><select id="category"><option>All Categories</option><option>HR &amp; Employee Policies</option><option>OSHA &amp; Safety</option><option>Front Office</option><option>Back Office / Clinical Operations</option><option>Insurance &amp; Documentation (non-PHI)</option><option>Management &amp; Operations</option><option>Training &amp; Onboarding</option><option>Scripts &amp; Communication</option></select></label></div>
+        <div class="search-row"><svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><input id="question" name="question" type="search" placeholder="Ask a question about a policy or procedure…" maxlength="2000" required autocomplete="off" aria-describedby="privacy-warning"><button id="search-button" class="primary" type="submit"><span class="button-icon" aria-hidden="true">⌕</span><span id="search-label">Search</span></button></div>
+        <p id="privacy-warning" class="privacy-warning"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m10 2 8 15H2L10 2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 7v4m0 2v1" stroke="currentColor" stroke-width="1.5"/></svg>Do not enter patient names or any patient information.</p>
+      </form>
+      <div class="trust-row"><span><b aria-hidden="true">✓</b> Approved documents only</span><span><b aria-hidden="true">▤</b> Sources with every answer</span><span><b aria-hidden="true">◇</b> No search history stored</span></div>
+    </section>
+    <section id="preview-controls" class="preview-controls" hidden aria-label="Synthetic development preview"><div><strong>Synthetic UI preview</strong><span>Local development only. No questions are submitted.</span></div><label>Preview state <select id="preview-state"><option value="welcome">Welcome</option><option value="found">Verified result</option><option value="not_found">Not found</option><option value="conflict">Conflict</option><option value="unavailable">Unavailable</option></select></label></section>
+    <section id="results" class="results" aria-live="polite" aria-atomic="true" aria-busy="false"></section>
+    <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+      <div class="section-heading"><div><span class="eyebrow">A CLEAR PATH TO THE RIGHT INFORMATION</span><h2 id="welcome-title">Company knowledge. Within reach.</h2></div><span class="section-note">Built for your workday</span></div>
+      <div class="feature-grid">
+        <article class="feature"><div class="feature-icon teal" aria-hidden="true">▤</div><span class="step">01</span><h3>Ask in your own words</h3><p>Search for a policy, process, or everyday workplace question.</p><span class="feature-tag">One place to start</span></article>
+        <article class="feature"><div class="feature-icon blue" aria-hidden="true">✓</div><span class="step">02</span><h3>Go straight to the source</h3><p>Read exact quotations, with the document and section clearly identified.</p><span class="feature-tag">Grounded in approved materials</span></article>
+        <article class="feature"><div class="feature-icon violet" aria-hidden="true">♧</div><span class="step">03</span><h3>Know your next step</h3><p>If information is missing or policies disagree, check with your manager.</p><span class="feature-tag">Clarity over guesswork</span></article>
+      </div>
+      <div class="guidance"><span class="guidance-icon" aria-hidden="true">i</span><div><strong>A little context goes a long way.</strong><p>Select your office and a category to help find the information that applies to you.</p></div><span class="guidance-decoration" aria-hidden="true">↗</span></div>
+    </section>
+    <footer><span><span class="footer-mark" aria-hidden="true">✧</span> Ace Family Dental <span class="footer-divider">/</span> Better together.</span><span>For employees. For everyday clarity.</span></footer>
+  </main>
+</body>
+</html>
