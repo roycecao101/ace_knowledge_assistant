@@ -18,12 +18,6 @@ The initializer creates the SQLite schema and inserts missing official test acco
 
 Open employee sign in at http://127.0.0.1:8000/login.html or administrator sign in at http://127.0.0.1:8000/admin-login.html.
 
-| User | Identifier | Test PIN / password | Home office |
-|---|---|---|---|
-| Jordan Test | ALP-01 | 24681357 | Alpharetta |
-| Riley Test | NOR-01 | 13572468 | Norcross |
-| Morgan Test | morgan | Ace-Admin-Test-2026 | — |
-| Avery Test | avery | Ace-Admin-Test-2026 | — |
 
 These published fixtures are for local testing only. Credentials exist in the explicit fixture seed, never in browser assets. Stored credentials use salted Argon2id hashes. Generated PINs appear only in their creation/reset response and a dialog that clears on close, tab hiding, or after 60 seconds. Deliver them privately; there is no retrieval endpoint.
 
