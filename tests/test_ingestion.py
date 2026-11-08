@@ -767,7 +767,12 @@ def test_live_search_diagnostics_are_opt_in_development_admin_counts(env, monkey
     monkeypatch.setenv('APP_ORIGIN', 'https://testserver')
     monkeypatch.setenv('KNOWLEDGE_SOURCE', 'drive')
     monkeypatch.setenv('DRIVE_AUTH_MODE', 'adc')
-    production = create_app(str(app.state.engine.url))
+    monkeypatch.setenv('DRIVE_KNOWLEDGE_FOLDER_ID', 'fictional-approved-root')
+    monkeypatch.setenv('SYNC_EXECUTOR', 'database')
+    # Use the existing synthetic index to test production response headers.
+    # Production database validation remains enabled and has separate coverage.
+    with patch('backend.main.database', return_value=(app.state.engine, app.state.factory)):
+        production = create_app()
     try:
         client = TestClient(production, base_url='https://testserver')
         response = client.post('/api/auth/admin/login', json={'identifier':'morgan','credential':'Ace-Admin-Test-2026'})

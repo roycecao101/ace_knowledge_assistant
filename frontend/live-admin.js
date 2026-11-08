@@ -119,7 +119,7 @@ if (!previewMode) (async () => {
   function knowledgePanel(state) {
     const synthetic = state.source_type === "local";
     const source = panel(synthetic ? "Synthetic development connection" : "Google Drive Connection",
-      "Automatic synchronization is checked every five minutes and runs at least daily while the server is online.");
+      "Automatic synchronization is checked every five minutes and runs at least daily when the configured scheduler is available.");
     if (synthetic) source.append(el("p", "", "This server uses fictional local documents."));
     source.append(syncHealth(state));
     const details = el("dl", "status-details");
@@ -131,6 +131,16 @@ if (!previewMode) (async () => {
     source.append(el("p", "panel-description", state.connection_verified ? "Folder access verified by a successful synchronization. Connection health reflects the most recent sync; review any errors below." : "Folder access awaits a successful synchronization."));
     if (state.error) renderStatus(state.error, "error", source.appendChild(el("div")));
     const actions = el("div", "actions");
+    if (state.authorization_mode === "oauth_web") {
+      actions.append(button("Connect Google Drive", () => run(async () => {
+        const result = await aceAuth.request("/api/admin/drive/connect", "POST");
+        location.assign(result.authorization_url);
+      })));
+      const outcome = new URLSearchParams(location.search).get("drive");
+      if (outcome === "failed") renderStatus("Google Drive authorization failed. Sign in again, reconnect with the approved Google account, and check the deployment configuration.", "error", source.appendChild(el("div")));
+      if (outcome === "connected") source.append(el("p", "panel-description", "Google authorization verified. Use Re-sync now to update the index."));
+      source.append(el("p", "panel-description", "Re-sync requests are queued securely and start on the next scheduler check, usually within five minutes."));
+    }
     actions.append(syncButton(state), button("Refresh status", () => run(navigate))); source.append(actions);
     return source;
   }

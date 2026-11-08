@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from .runtime import production, validate_environment
 
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -31,10 +32,11 @@ def quiet_google_logging():
 
 def auth_mode():
     mode = os.getenv('DRIVE_AUTH_MODE', 'adc')
-    if mode not in ('adc', 'oauth_local'):
-        raise DriveAuthError('Set DRIVE_AUTH_MODE to adc or oauth_local.')
-    if mode == 'oauth_local' and os.getenv('APP_ENV', 'development') != 'development':
-        raise DriveAuthError('Local desktop OAuth is allowed only with APP_ENV=development.')
+    if mode not in ('adc', 'oauth_local', 'oauth_web'):
+        raise DriveAuthError('Set DRIVE_AUTH_MODE to adc, oauth_local, or oauth_web.')
+    if mode == 'oauth_local' and (os.getenv('APP_ENV', 'development') != 'development'
+            or os.getenv('RENDER') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')):
+        raise DriveAuthError('Local desktop OAuth is allowed only in local development with APP_ENV=development.')
     return mode
 
 
@@ -49,7 +51,11 @@ def approved_identity():
 
 
 def validate_folder(folder):
-    if auth_mode() == 'oauth_local' and folder != approved_identity()[1]:
+    if production():
+        approved = os.getenv('DRIVE_KNOWLEDGE_FOLDER_ID', '')
+        if not approved or folder != approved:
+            raise DriveAuthError('The folder must match the production-approved DRIVE_KNOWLEDGE_FOLDER_ID.')
+    if auth_mode() in ('oauth_local', 'oauth_web') and folder != approved_identity()[1]:
         raise DriveAuthError('The folder must match DRIVE_KNOWLEDGE_FOLDER_ID approved by the technical owner.')
 
 
@@ -161,11 +167,15 @@ def build_service(credentials):
 def check_account(service, email):
     actual = service.about().get(fields='user(emailAddress)').execute().get('user', {}).get('emailAddress', '')
     if actual.casefold() != email:
-        raise DriveAuthError('The signed-in Google account does not match DRIVE_AUTHORIZED_EMAIL. Repeat local login.')
+        raise DriveAuthError('The signed-in Google account does not match DRIVE_AUTHORIZED_EMAIL. Reconnect with the approved account.')
 
 
 def drive_service(*, require_verified=True):
+    validate_environment()
     quiet_google_logging()
+    if auth_mode() == 'oauth_web':
+        from .drive_web_oauth import load_service
+        return load_service()
     if auth_mode() == 'oauth_local':
         store = OAuthStore.configured()
         service = build_service(store.load(require_verified=require_verified))
@@ -175,6 +185,8 @@ def drive_service(*, require_verified=True):
     from google.oauth2.service_account import Credentials as ServiceCredentials
     from google.auth.compute_engine import Credentials as AttachedCredentials
     credentials, _ = google.auth.default(scopes=DRIVE_SCOPES)
+    if production() and not isinstance(credentials, AttachedCredentials):
+        raise DriveAuthError('Production Drive access requires an attached service account through ADC.')
     if not isinstance(credentials, (ServiceCredentials, AttachedCredentials)) or getattr(credentials, '_subject', None):
         raise DriveAuthError('ADC requires a dedicated service identity without user delegation. Use oauth_local for development.')
     return build_service(credentials)

@@ -1,12 +1,35 @@
 import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.engine import URL, make_url
+from .runtime import production, validate_environment
 
 class Base(DeclarativeBase):
     pass
 
 def database(url=None):
-    engine = create_engine(url or os.getenv('DATABASE_URL', 'sqlite:///./backend/ace.db'))
+    validate_environment()
+    configured = url or os.getenv('DATABASE_URL')
+    if not configured and os.getenv('CLOUD_SQL_CONNECTION_NAME'):
+        configured = URL.create('postgresql+psycopg', username=os.environ['DB_USER'],
+            password=os.environ['DB_PASSWORD'], database=os.environ['DB_NAME'],
+            query={'host': '/cloudsql/' + os.environ['CLOUD_SQL_CONNECTION_NAME']})
+    parsed = make_url(configured or 'sqlite:///./backend/ace.db')
+    if parsed.drivername in ('postgres', 'postgresql'):
+        parsed = parsed.set(drivername='postgresql+psycopg')
+    if production() and parsed.drivername != 'postgresql+psycopg':
+        raise RuntimeError('Production requires persistent PostgreSQL; SQLite is for local development.')
+    if production() and not configured:
+        raise RuntimeError('Production requires an explicit persistent database.')
+    if production() and os.getenv('RENDER'):
+        if parsed.query.get('sslmode', 'require') != 'require':
+            raise RuntimeError('Render database connections must require TLS.')
+        parsed = parsed.update_query_dict({'sslmode': 'require'})
+    options = dict(pool_pre_ping=True, hide_parameters=True)
+    if parsed.get_backend_name() == 'postgresql':
+        options.update(pool_size=3, max_overflow=2, pool_timeout=10,
+                       connect_args={'connect_timeout': 10, 'options': '-c statement_timeout=120000'})
+    engine = create_engine(parsed, **options)
     if engine.dialect.name == 'sqlite':
         @event.listens_for(engine, 'connect')
         def configure(connection, _):

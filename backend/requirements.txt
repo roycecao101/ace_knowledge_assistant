@@ -11,3 +11,5 @@ google-auth>=2.35,<3
 google-auth-httplib2>=0.2,<1
 google-auth-oauthlib>=1.2,<2
 httplib2>=0.22,<1
+psycopg[binary]>=3.2,<4
+cryptography>=44,<48

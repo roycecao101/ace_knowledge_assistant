@@ -2,6 +2,8 @@
 
 FastAPI serves the existing employee and administrator pages and same-origin authentication APIs. The original page layouts and synthetic specimens are retained. Real administrative account controls use the existing table, form, panel, and dialog styling.
 
+For hosted deployment, use the [Render production deployment guide](docs/render-deployment.md). It lists remaining privacy/authentication prerequisites, exact dashboard settings, runtime variables, real administrator provisioning, PostgreSQL persistence, Web OAuth, scheduled sync and the judge login URLs. Local Desktop OAuth and the development database stay on your computer; no deployment runs automatically.
+
 ## Local setup
 
 For the existing Google Drive installation, use the [current restart instructions](docs/dashboard-sync-fix.md#starting-from-vs-code). They load the private local environment before launching FastAPI. Keep the existing database and accounts; the fresh-install fixture instructions below are not required for a restart.

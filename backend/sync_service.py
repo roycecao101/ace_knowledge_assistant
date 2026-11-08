@@ -12,6 +12,7 @@ from .offices import scope_codes
 from .drive_client import FileUnreadable
 from .drive_auth import DriveAuthError, validate_folder
 from .discrepancies import publish_scan
+from .runtime import validate_environment
 
 class SyncBusy(Exception):
     pass
@@ -35,6 +36,7 @@ class SyncService:
 
     @staticmethod
     def default_source():
+        validate_environment()
         source = os.getenv('KNOWLEDGE_SOURCE', 'drive')
         if source == 'local':
             from .local_source import LocalSource

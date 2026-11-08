@@ -22,6 +22,18 @@ from .database import database
 from .models import Employee, Administrator, AuthSession, LoginAttempt, Office
 from .offices import catalog
 from .auth import hasher, DUMMY, verify, digest, resolve, serialize, lock_admin_changes
+from .runtime import validate_environment
+from .migrate import ready as schema_ready
+from .job_dispatch import dispatch_sync
+
+
+class HealthTrustedHostMiddleware(TrustedHostMiddleware):
+    async def __call__(self, scope, receive, send):
+        # Hosted HTTP probes may use an instance-IP Host header. These two
+        # fixed, read-only endpoints never inspect accounts or documents.
+        if scope['type'] == 'http' and scope['method'] == 'GET' and scope['path'] in ('/healthz', '/readyz'):
+            return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
 
 FRONTEND = Path(__file__).resolve().parent.parent / 'frontend'
 CATEGORIES = ['All Categories', 'HR & Employee Policies', 'OSHA & Safety', 'Front Office', 'Back Office / Clinical Operations', 'Insurance & Documentation (non-PHI)', 'Management & Operations', 'Training & Onboarding', 'Scripts & Communication']
@@ -79,9 +91,23 @@ class Search(BaseModel):
     category: str
 
 def create_app(url=None):
+    validate_environment(web=True)
     auth_mode()  # Reject desktop OAuth in hosted/production configuration at startup.
     @asynccontextmanager
     async def lifespan(app):
+        if production:
+            try:
+                if not schema_ready(app.state.engine):
+                    raise RuntimeError('Schema not ready')
+                with factory() as db:
+                    if db.scalar(select(func.count()).select_from(Administrator).where(Administrator.active.is_(True))) < 2:
+                        raise RuntimeError('Administrator setup incomplete')
+                    from .knowledge_models import KnowledgeState
+                    state = db.get(KnowledgeState, 1)
+                    if not state or state.folder_id != os.environ['DRIVE_KNOWLEDGE_FOLDER_ID']:
+                        raise RuntimeError('Approved folder changed; execute the release command')
+            except Exception:
+                raise RuntimeError('Production is not ready. Check database connectivity and execute the release command.') from None
         logger.info('Knowledge APIs registered: GET /api/admin/knowledge, GET /api/admin/documents, POST /api/admin/sync, PATCH /api/admin/settings')
         logger.info('Knowledge runtime: source=%s, auth=%s, environment=%s, project_venv=%s',
                     os.getenv('KNOWLEDGE_SOURCE', 'drive'), auth_mode(),
@@ -89,15 +115,16 @@ def create_app(url=None):
         if (os.getenv('KNOWLEDGE_SOURCE', 'drive') == 'drive' and auth_mode() == 'adc'
                 and 'DRIVE_AUTH_MODE' not in os.environ):
             logger.warning('DRIVE_AUTH_MODE is unset; this process uses ADC. Local OAuth requires restarting with DRIVE_AUTH_MODE=oauth_local and the approved account/folder environment.')
-        required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms', 'discrepancy_scan', 'discrepancies'}
-        if not required.issubset(inspect(app.state.engine).get_table_names()):
-            logger.error('Knowledge schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
-        elif not {'issue_id', 'evidence_pairs'}.issubset({c['name'] for c in inspect(app.state.engine).get_columns('discrepancies')}):
-            logger.error('Discrepancy grouping schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
-        elif 'revision' not in {c['name'] for c in inspect(app.state.engine).get_columns('discrepancy_scan')}:
-            logger.error('Discrepancy scan revision schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
-        if 'offices' not in inspect(app.state.engine).get_table_names():
-            logger.error('Office catalog is missing. Run python -m backend.offices with the server database configuration before serving requests.')
+        if not production:
+            required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms', 'discrepancy_scan', 'discrepancies'}
+            if not required.issubset(inspect(app.state.engine).get_table_names()):
+                logger.error('Knowledge schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+            elif not {'issue_id', 'evidence_pairs'}.issubset({c['name'] for c in inspect(app.state.engine).get_columns('discrepancies')}):
+                logger.error('Discrepancy grouping schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+            elif 'revision' not in {c['name'] for c in inspect(app.state.engine).get_columns('discrepancy_scan')}:
+                logger.error('Discrepancy scan revision schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+            if 'offices' not in inspect(app.state.engine).get_table_names():
+                logger.error('Office catalog is missing. Run python -m backend.offices with the server database configuration before serving requests.')
         async def schedule():
             while True:
                 try:
@@ -106,14 +133,20 @@ def create_app(url=None):
                     # Exception messages/tracebacks can contain private source data.
                     logger.warning('Knowledge scheduler check failed (%s). Check schema initialization and database availability.', type(exc).__name__)
                 await asyncio.sleep(300)
-        worker = asyncio.create_task(schedule())
-        yield
-        worker.cancel()
+        worker = None if production else asyncio.create_task(schedule())
         try:
-            await worker
-        except asyncio.CancelledError:
-            pass
-    app = FastAPI(lifespan=lifespan)
+            yield
+        finally:
+            if worker:
+                worker.cancel()
+                try:
+                    await worker
+                except asyncio.CancelledError:
+                    pass
+            engine.dispose()
+    production = os.getenv('APP_ENV', 'development') == 'production'
+    app = FastAPI(lifespan=lifespan, docs_url=None if production else '/docs',
+                  redoc_url=None if production else '/redoc', openapi_url=None if production else '/openapi.json')
     engine, factory = database(url)
     app.state.engine, app.state.factory = engine, factory
     app.state.sync = SyncService(factory)
@@ -125,10 +158,12 @@ def create_app(url=None):
         raise RuntimeError('Production requires Google Drive ingestion')
     cookie = '__Host-ace_session' if production else 'ace_session'
     from urllib.parse import urlsplit
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlsplit(origin).hostname] if production else ['127.0.0.1', 'localhost', 'testserver'])
+    app.add_middleware(HealthTrustedHostMiddleware, allowed_hosts=[urlsplit(origin).hostname] if production else ['127.0.0.1', 'localhost', 'testserver'])
 
     @app.middleware('http')
     async def security(request, call_next):
+        if production and ('preview' in request.query_params or request.url.path.startswith('/preview')):
+            return JSONResponse({'detail': 'Not found.'}, 404)
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             supplied = request.headers.get('origin')
             # Both loopback names work in development, but only on the origin
@@ -139,7 +174,14 @@ def create_app(url=None):
                 return JSONResponse({'detail': 'Invalid request origin.'}, 403)
             if request.headers.get('sec-fetch-site') == 'cross-site':
                 return JSONResponse({'detail': 'Cross-site request rejected.'}, 403)
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            if not production:
+                raise
+            # Do not send tracebacks, SQL, query text, or source data to cloud logs.
+            logger.warning('Request failed (%s).', type(exc).__name__)
+            response = JSONResponse({'detail': 'Service temporarily unavailable.'}, 503)
         response.headers.update({'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
         if production:
             response.headers['Strict-Transport-Security'] = 'max-age=31536000'
@@ -160,6 +202,22 @@ def create_app(url=None):
         if identity[0].role != 'admin':
             raise HTTPException(403, 'Administrator access required.')
         return identity
+
+    from .drive_web_oauth import install_routes
+    install_routes(app, admin)
+
+    @app.get('/healthz', include_in_schema=False)
+    def health():
+        return {'status': 'ok'}
+
+    @app.get('/readyz', include_in_schema=False)
+    def readiness():
+        try:
+            if schema_ready(engine):
+                return {'status': 'ok'}
+        except Exception:
+            pass
+        return JSONResponse({'status': 'unavailable'}, 503)
 
     @app.exception_handler(IntegrityError)
     async def duplicate(request, exc):
@@ -360,7 +418,9 @@ def create_app(url=None):
     @app.get('/api/admin/knowledge', dependencies=[Depends(admin)])
     @app.get('/api/admin/documents', dependencies=[Depends(admin)])
     def knowledge_status():
-        return app.state.sync.status()
+        status = app.state.sync.status()
+        status['authorization_mode'] = auth_mode()
+        return status
 
     @app.patch('/api/admin/settings', dependencies=[Depends(admin)])
     def knowledge_settings(body: FolderSettings):
@@ -379,6 +439,12 @@ def create_app(url=None):
             raise HTTPException(409, 'Configure the Google Drive folder ID first.')
         if status['running']:
             raise HTTPException(409, 'Synchronization is already running.')
+        if production:
+            try:
+                dispatch_sync(factory)
+            except Exception:
+                raise HTTPException(503, 'Synchronization could not be scheduled. Please retry.') from None
+            return {'status': 'scheduled'}
         try:
             reservation = app.state.sync.reserve()
         except SyncBusy:

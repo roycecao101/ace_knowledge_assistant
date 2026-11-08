@@ -1,0 +1,12 @@
+# Deny by default: no Git history, local env, credentials, documents or databases.
+**
+!Dockerfile
+!backend/
+!backend/*.py
+!backend/requirements.txt
+!frontend/
+!frontend/*.html
+!frontend/*.css
+!frontend/*.js
+!frontend/assets/
+!frontend/assets/ace-logo.webp

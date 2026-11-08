@@ -14,3 +14,17 @@ token*.json
 *oauth-client*.json
 *oauth-token*.json
 client_secret*.json
+# Private source documents, exports, backups, and deployment secrets.
+*.pdf
+*.doc
+*.docx
+*.xlsx
+*.csv
+*.pem
+*.key
+*.p12
+*.dump
+*.sql
+backups/
+private/
+documents/

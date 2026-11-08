@@ -4,8 +4,10 @@ import os
 from .database import Base, database
 from .models import Employee, Administrator, AdminGuard
 from .auth import hasher
+from .runtime import development_only
 
 def initialize(engine):
+    development_only()
     Base.metadata.create_all(engine)
     from .offices import initialize as initialize_offices
     initialize_offices(engine)
@@ -19,6 +21,7 @@ def initialize(engine):
         db.commit()
 
 def seed(factory):
+    development_only()
     with factory() as db:
         for identifier, name, pin, office in [('ALP-01', 'Jordan Test', '24681357', 'Alpharetta'), ('NOR-01', 'Riley Test', '13572468', 'Norcross')]:
             if not db.get(Employee, identifier):

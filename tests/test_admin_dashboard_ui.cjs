@@ -91,6 +91,7 @@ async function dashboard(hash = '#overview') {
         }
         if (url === '/api/admin/settings') {state.folder_id = body.folder_id; return {ok:true};}
         if (url === '/api/admin/sync') return {status:'scheduled'};
+        if (url === '/api/admin/drive/connect') return {authorization_url:'https://accounts.google.com/o/oauth2/auth?state=fictional-state'};
         if (/\/api\/admin\/(employees|admins)\/[^/]+$/.test(url) && method === 'PATCH') {
           const accounts = url.includes('/employees/') ? employees : admins;
           Object.assign(accounts.find(a => url.endsWith(`/${a.id}`)), body); return {ok:true};
@@ -132,6 +133,23 @@ test('six sections render, legacy knowledge links resolve, and unknown links rec
     assert.ok(text(page.content).includes('Needs Review'));
   }
   assert.ok(!text(page.content).includes('service is not connected'));
+});
+
+test('hosted Drive connection starts via the authenticated API and reports safe callback status', async () => {
+  const page = await dashboard();
+  page.state.authorization_mode = 'oauth_web';
+  page.context.location.search = '?drive=failed';
+  let destination;
+  page.context.location.assign = url => { destination = url; };
+  await page.navigate('#knowledge');
+  assert.ok(text(page.content).includes('Google Drive authorization failed'));
+  assert.ok(text(page.content).includes('next scheduler check'));
+  await page.click(byText(page.content, 'button', 'Connect Google Drive'));
+  assert.ok(page.calls.some(c => c.url === '/api/admin/drive/connect' && c.method === 'POST'));
+  assert.equal(destination, 'https://accounts.google.com/o/oauth2/auth?state=fictional-state');
+  page.context.location.search = '?drive=connected';
+  await page.navigate('#knowledge');
+  assert.ok(text(page.content).includes('Google authorization verified'));
 });
 
 test('Find & Fix alert, verified detail refresh, sync, resolved and failed states render', async () => {

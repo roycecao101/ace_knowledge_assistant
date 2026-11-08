@@ -212,14 +212,23 @@ def test_concurrent_admin_minimum(app):
         assert len([a for a in db.scalars(select(Administrator)) if a.active])==2
 
 def test_production_configuration(tmp_path,monkeypatch):
+    # Seed only a development fixture. Production database enforcement is tested
+    # separately; inject this isolated engine to test HTTPS middleware and cookies.
+    from unittest.mock import patch
+    fixture = create_app(f'sqlite:///{tmp_path}/secure.db')
+    initialize(fixture.state.engine)
+    seed(fixture.state.factory)
     monkeypatch.setenv('APP_ENV','production')
+    monkeypatch.setenv('DRIVE_AUTH_MODE', 'adc')
+    monkeypatch.setenv('KNOWLEDGE_SOURCE', 'drive')
+    monkeypatch.setenv('DRIVE_KNOWLEDGE_FOLDER_ID', 'fictional-approved-root')
+    monkeypatch.setenv('SYNC_EXECUTOR', 'database')
     monkeypatch.setenv('APP_ORIGIN','http://example.test')
     with pytest.raises(RuntimeError):
         create_app(f'sqlite:///{tmp_path}/bad.db')
     monkeypatch.setenv('APP_ORIGIN','https://example.test')
-    app=create_app(f'sqlite:///{tmp_path}/secure.db')
-    initialize(app.state.engine)
-    seed(app.state.factory)  # isolated test fixtures; CLI rejects production seeding
+    with patch('backend.main.database', return_value=(fixture.state.engine, fixture.state.factory)):
+        app=create_app()
     c=TestClient(app,base_url='https://example.test')
     r=login(c)
     assert 'Secure' in r.headers['set-cookie']
