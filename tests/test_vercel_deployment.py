@@ -1,0 +1,116 @@
+"""Vercel adapter regression checks. No cloud resources or credentials used."""
+import importlib
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from test_render_deployment import hosted  # shared isolated database fixture
+from backend.database import database
+from backend.drive_auth import auth_mode, DriveAuthError
+from backend.runtime import validate_environment, development_only
+from backend.main import create_app
+from backend.sync_service import SyncService
+from backend.hosting_models import SyncRequest
+
+
+def test_vercel_rejects_development_utilities_and_preview(hosted, monkeypatch):
+    monkeypatch.setenv('VERCEL', '1')
+    with pytest.raises(RuntimeError, match='production'):
+        validate_environment()
+    with pytest.raises(RuntimeError, match='local development'):
+        development_only()
+    monkeypatch.setenv('DRIVE_AUTH_MODE', 'oauth_local')
+    with pytest.raises(DriveAuthError, match='local development'):
+        auth_mode()
+    monkeypatch.setenv('DRIVE_AUTH_MODE', 'oauth_web')
+    monkeypatch.setenv('APP_ENV', 'production')
+    validate_environment(web=True)
+    monkeypatch.setenv('SYNC_EXECUTOR', 'cloud_run')
+    with pytest.raises(RuntimeError, match='Vercel requires'):
+        validate_environment(web=True)
+    monkeypatch.setenv('SYNC_EXECUTOR', 'database')
+    monkeypatch.setenv('VERCEL_ENV', 'preview')
+    with pytest.raises(RuntimeError, match='preview'):
+        validate_environment()
+
+
+@pytest.mark.parametrize('url', [
+    'sqlite:///:memory:',
+    'postgresql://user:private@dpg-internal/ace',
+    'postgresql://user:private@db.render.com/ace?sslmode=disable',
+    'postgresql://user:private@db.render.com/ace?sslmode=require',
+    'postgresql://user:private@db.render.com/ace?host=dpg-internal',
+    'postgresql://user:private@db.render.com/ace?hostaddr=127.0.0.1',
+])
+def test_vercel_database_fails_before_connecting(hosted, monkeypatch, url):
+    monkeypatch.setenv('VERCEL', '1')
+    monkeypatch.setenv('APP_ENV', 'production')
+    with patch('backend.database.create_engine') as create:
+        with pytest.raises(RuntimeError):
+            database(url)
+        create.assert_not_called()
+
+
+def test_external_database_verifies_certificates_and_bounds_pool(hosted, monkeypatch):
+    monkeypatch.setenv('VERCEL', '1')
+    monkeypatch.setenv('APP_ENV', 'production')
+    with patch('backend.database.create_engine') as create:
+        database('postgres://user:private@db.render.com/ace')
+        url = create.call_args.args[0]
+        assert url.drivername == 'postgresql+psycopg'
+        assert url.query['sslmode'] == 'verify-full'
+        assert url.query['sslrootcert'] == 'system'
+        assert create.call_args.kwargs['pool_size'] == 1
+        assert create.call_args.kwargs['max_overflow'] == 1
+        assert create.call_args.kwargs['hide_parameters'] is True
+
+
+def test_vercel_entrypoint_routes_roles_csrf_and_durable_sync(hosted, monkeypatch):
+    SyncService(hosted.state.factory).configure('approved-root')
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('VERCEL', '1')
+    monkeypatch.setenv('VERCEL_ENV', 'production')
+    monkeypatch.setenv('BOOTSTRAP_ADMINS', 'must-never-be-consumed-by-web')
+    with patch('backend.main.database', return_value=(hosted.state.engine, hosted.state.factory)):
+        production = create_app()
+    with patch('backend.main.app', production):
+        entry = importlib.import_module('main')
+        assert entry.app is production
+    import os
+    assert 'BOOTSTRAP_ADMINS' not in os.environ
+    with TestClient(production, base_url='https://testserver') as client:
+        for path in ('/login.html', '/admin-login.html', '/login.js', '/style.css', '/assets/ace-logo.webp'):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.headers['cache-control'] == 'no-store'
+        for path, target in (('/index.html', '/login.html'), ('/admin.html', '/admin-login.html')):
+            assert client.get(path, follow_redirects=False).headers['location'] == target
+        assert client.get('/api/admin/documents').status_code == 401
+        assert client.get('/docs').status_code == 404
+        assert client.get('/backend/ace.db').status_code == 404
+        assert client.get('/login.html', headers={'host': 'evil.test'}).status_code == 400
+        response = client.post('/api/auth/employee/login', json={
+            'identifier': 'ALP-01', 'credential': '24681357'})
+        assert response.status_code == 200
+        client.headers['X-CSRF-Token'] = response.json()['csrf_token']
+        assert client.get('/index.html').status_code == 200
+        assert client.get('/api/admin/documents').status_code == 403
+        assert client.post('/api/admin/sync').status_code == 403
+        assert client.post('/api/admin/drive/connect').status_code == 403
+        response = client.post('/api/auth/admin/login', json={
+            'identifier': 'morgan', 'credential': 'Ace-Admin-Test-2026'})
+        assert response.status_code == 200
+        assert 'Secure' in response.headers['set-cookie']
+        client.headers.pop('X-CSRF-Token')
+        assert client.post('/api/admin/sync').status_code == 403
+        client.headers['X-CSRF-Token'] = response.json()['csrf_token']
+        assert client.get('/admin.html').status_code == 200
+        with patch.object(production.state.sync, 'run') as run:
+            assert client.post('/api/admin/sync').status_code == 202
+            run.assert_not_called()
+        with hosted.state.factory() as db:
+            assert db.scalar(select(SyncRequest.requested)) == 1
+        assert client.post('/api/admin/sync', headers={'origin': 'https://evil.test'}).status_code == 403
+        assert client.post('/api/admin/drive/connect').status_code == 200

@@ -2,7 +2,7 @@
 
 FastAPI serves the existing employee and administrator pages and same-origin authentication APIs. The original page layouts and synthetic specimens are retained. Real administrative account controls use the existing table, form, panel, and dialog styling.
 
-For hosted deployment, use the [Render production deployment guide](docs/render-deployment.md). It lists remaining privacy/authentication prerequisites, exact dashboard settings, runtime variables, real administrator provisioning, PostgreSQL persistence, Web OAuth, scheduled sync and the judge login URLs. Local Desktop OAuth and the development database stay on your computer; no deployment runs automatically.
+For a $0 fictional demonstration, use the [free Render deployment guide](docs/render-deployment.md). It gives exact Free web/PostgreSQL settings, private fictional administrator setup, employee login provisioning, synthetic documents, isolated Web OAuth and manual migration/sync commands. Scheduled Google Drive synchronization is unavailable in this plan, and the free database expires after 30 days. Production security stays enabled; real Ace documents, credentials, local Desktop OAuth and the development database stay out of the demo. Nothing deploys automatically.
 
 ## Local setup
 
@@ -51,6 +51,14 @@ node --test tests/test_auth_client.cjs tests/test_employee_search_ui.cjs tests/t
 ```
 
 Tests use fresh temporary databases, fictional identities, and synthetic questions. They cover the official logins/home offices, failed attempts and lock duration, deactivation across clients, PIN/session invalidation, administrator access, role denial, administrator minimums, logout, unauthenticated searches, CSRF/origin checks, password constraints, expiration, one-time PIN creation, and idempotent seeding.
+
+## Optional Vercel hosting
+
+See [Vercel compatibility and deployment instructions](docs/vercel-deployment.md)
+for the ASGI entrypoint, external Render PostgreSQL connection, explicit release
+step, Google Web OAuth hostname configuration, finite synchronization jobs, and
+privacy/capacity verification gates. No deployment is automatic. Existing Render
+and local commands remain supported.
 
 ## Isolated synthetic preview
 

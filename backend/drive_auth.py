@@ -35,7 +35,7 @@ def auth_mode():
     if mode not in ('adc', 'oauth_local', 'oauth_web'):
         raise DriveAuthError('Set DRIVE_AUTH_MODE to adc, oauth_local, or oauth_web.')
     if mode == 'oauth_local' and (os.getenv('APP_ENV', 'development') != 'development'
-            or os.getenv('RENDER') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')):
+            or os.getenv('VERCEL') or os.getenv('RENDER') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')):
         raise DriveAuthError('Local desktop OAuth is allowed only in local development with APP_ENV=development.')
     return mode
 

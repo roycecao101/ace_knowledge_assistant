@@ -1,233 +1,263 @@
-# Render production deployment
+# Free Render demonstration deployment
 
-Prepared November 8, 2026. Nothing in this change deploys, pushes, connects to Google, reads private source documents, or changes the local `.env`/SQLite database. Use the manual dashboard procedure below. There is intentionally no one-click deployment button.
+Prepared November 8, 2026. This replaces the paid Render plan. **Nothing has been provisioned, pushed, connected to Google, or deployed.** The steps below are for the operator to run manually. Use only fictional identities/documents and newly created demo credentials. Keep the existing local `.env`, SQLite database, Ace Drive account, documents and OAuth files untouched.
 
-## New Web Service handoff
+## Decision and cost boundary
 
-Select **Docker** on the current form, with the repository root left empty, Dockerfile `./Dockerfile`, and build context `.`. There is **no Render Build Command** for this runtime: Render builds the Dockerfile automatically. The Dockerfile's dependency-install command is `pip install --no-cache-dir -r backend/requirements.txt`; do not paste it into a native Python service configuration as a substitute for this Docker setup. Set **Pre-Deploy Command** to `python -m backend.release`, **Docker Command** to `python -m backend.serve`, and **Health Check Path** to `/readyz`. Keep automatic deploys and previews disabled. Do not initiate deployment until the prerequisites below are resolved.
+Use **one Free Docker Web Service + one Free Render PostgreSQL database**, in a free workspace. Estimated infrastructure cost: **$0 within included usage**. Select the literal **Free** compute option for both resources. Do not select a paid plan, paid workspace, disk, worker, cron job, backup service, external scheduler, custom domain purchase or AI API. There is no Blueprint or automatic deployment workflow.
 
-The local code already contains the non-root Docker image, production configuration guards, PostgreSQL adapter, explicit schema release and two-administrator bootstrap, Web OAuth with encrypted grants, readiness checks, and a durable sync queue. The operator must still provision Render resources, configure the Google Web client and runtime secrets, approve data handling/logging, and perform a synthetic staging rehearsal.
+For a strict no-charge demo, use a free workspace without a payment method; do not attach billing to the demo Google project. Render can bill bandwidth/build overages when a payment method exists. If free eligibility is unavailable, a card/upgrade is required, or quota is exhausted, stop and leave the demo undeployed/suspended; do not fall back to paid resources. Do not change billing for an existing shared workspace: use a separate eligible demo workspace.
 
-Read-only GitHub verification on November 8, 2026 found `main` at `411e8dcc3e9e0ad84bae750f28634ee8518b99a6` (`Integrated Ace's official logo`). The deployment changes are uncommitted local modifications/new files and are **not pushed**. Review and commit/push them before Render builds the selected branch. No GitHub push or Render deployment was performed during preparation.
+Compatibility is based on the repository's PostgreSQL adapter and production configuration, not a completed Render rehearsal. Free PostgreSQL supports the required relational storage. Keep the corpus tiny and presentation traffic modest; memory, build success and concurrent login/search performance still require live rehearsal. Retain one application worker and the existing Argon2 settings.
 
-### Initial cost estimate
+## What works and what is limited
 
-For the recommended one-instance web service and a small approved corpus:
+| Capability | Free demonstration behavior |
+| --- | --- |
+| Employee and admin sign-in | Existing production authentication, private credentials, persisted accounts/sessions in PostgreSQL |
+| Employee/admin/office management | Existing APIs, one-time random employee PINs, session revocation and two-active-admin minimum |
+| Search, office/category filtering, verified quotes | Existing pipeline, after the fictional corpus is manually synchronized |
+| Find & Fix Log | Existing scan and verified evidence comparison after each successful manual sync; human review remains required |
+| Drive Web OAuth and manual ingestion | Supported with a separate demo Google account/project/folder and operator CLI below |
+| Dashboard Re-sync | Persists a request; **no worker consumes it automatically**. Operator runs `python -m backend.sync --if-due` |
+| Scheduled Google Drive synchronization | **Unavailable in this plan.** Existing hosted scheduling needs a separate executor. Render Cron Jobs have a $1 monthly minimum; none is created. Sleeping web services cannot supply reliable scheduling. No keep-alive pings or scheduler workaround is configured |
+| Migrations/first account setup | Run explicitly from your computer against the demo database, before starting the web service; no paid pre-deploy step |
+| Render shell / one-off jobs / persistent disk | Unavailable on free web instances; not needed for this procedure |
+| Always-on availability | Web service sleeps after 15 idle minutes; waking takes about a minute. Restarts can interrupt requests |
+| Database lifetime/recovery | Free PostgreSQL: 1 GB, expires after 30 days, inaccessible at expiry, deleted after a further 14 days; no managed backups. Only one free database per workspace |
+| Long-term hosting | **Not provided by this expiring database plan.** Before expiry, retire the demo or manually recreate/reseed an eligible free database; never upgrade automatically |
 
-| Resource | Recommended compute | Estimated USD/month |
-| --- | --- | --- |
-| Web | `1c-2g`, legacy Standard; 1 CPU / 2 GB RAM | $25 |
-| Postgres | Paid `0.1c-256mb`, legacy Basic-256mb | $6 compute |
-| Postgres storage | 5 GB | Budget $1.50 at $0.30/GB-month |
-| Sync cron | `1c-2g`, legacy Standard | $0.00058 per active minute, $1 monthly minimum |
+Free web hours are shared across the workspace (750/month); exhausted hours suspend services. Bandwidth/build limits also apply. Accounts/indexes survive web restarts because they are in PostgreSQL, but are lost when the database is deleted. All these are host limits; no application feature or security control is removed. See [Render free instances](https://render.com/docs/free), [pre-deploy availability](https://render.com/docs/deploys#pre-deploy-command) and [cron billing](https://render.com/docs/cronjobs#compute-plans-and-billing).
 
-Budget **about $33.50/month at the cron minimum**, plus workspace subscription, excess usage, taxes and any larger compute/storage. A paid workspace is separate from paid service instances; if the organization selects the $25/month Pro workspace, budget about $58.50/month at the cron minimum. Actual cron runtime includes every five-minute check and document processing; this is not a measured workload estimate. For example, 3,000 active minutes cost about $1.74 for cron instead of $1. Confirm the displayed quote before provisioning. Prices checked against [Render pricing](https://render.com/pricing), [Render's current service price examples](https://render.com/articles/set-up-self-hosted-github-actions-runners-on-render), and [cron billing](https://render.com/docs/cronjobs) on November 8, 2026. Downsize only after memory/load rehearsal.
+## 1. Review the source and prepare fictional documents
 
-## Deployment blockers and prerequisites
-
-Resolve these before importing confidential material or sharing access:
-
-1. **Google authorization:** Desktop OAuth and Google Cloud attached ADC cannot be reused on Render. Create a separate **Web application** client and an organization-approved consent configuration. The implemented `oauth_web` flow uses administrator initiation, CSRF, a one-use state, PKCE, a browser nonce, an active administrator session, and the approved account/folder. No service-account key or domain-wide delegation is needed. Keep the Desktop client and local grant on your computer.
-2. **Durable storage:** provision paid Render Postgres. Render web/cron filesystems are ephemeral and are not the database. Do not use SQLite, a free expiring database, or a copied local database in the image. The application rejects production SQLite. All accounts, office catalog, sessions, knowledge passages/indexes, Find & Fix state, encrypted Drive grants and sync requests live in Postgres.
-3. **Privacy approval and logging:** the owner must approve the Render region, processors, account access and retention for the permitted Buildathon data. No PHI, patient information or unapproved documents. Verify with Render that edge/request logs exclude bodies, credentials and OAuth callback query strings, and that Postgres logs exclude bound parameter values and document/query contents. Render documents slow-query SQL logging; application log suppression does **not** control database or edge logging. If the required exclusions cannot be guaranteed, confidential production deployment is blocked. Rehearse with fictional documents only until resolved. Do not relax Buildathon requirements to use this host.
-4. **Real accounts:** the initial production database needs at least two real administrators. No known test credentials are seeded. Create separate employee/judge accounts privately after initial setup.
-5. **Live verification:** an operator must verify Google consent, Drive access, cron execution, PostgreSQL behavior, log exclusions and persistence on Render before judging. Local mocked tests cannot establish external account permissions or host behavior.
-
-Read-only Drive consent grants API read access across the authorized account; the application additionally restricts every inventory/download to the approved folder tree, rechecks ancestry, and ignores shortcuts. Use a dedicated organization-controlled Google account with access only to the approved knowledge material. Do not authorize a personal account containing unrelated confidential material. If Workspace policy or Google verification prevents this Web OAuth strategy, stop and obtain organizational approval; do not substitute a Desktop token or create a JSON service-account key.
-
-Google recommends library-based web-server OAuth and secure server-side token storage: [Web server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [OAuth security practices](https://developers.google.com/identity/protocols/oauth2/resources/best-practices). Render documents [database encryption, access and logs](https://render.com/docs/postgresql-creating-connecting).
-
-## Architecture and security behavior
-
-One Docker **Web Service** serves the existing frontend and `/api/*` from one HTTPS origin. No separate static site, CORS origin, frontend API hostname, file upload or public document directory is introduced. Styling, employee/admin authentication, session-bound CSRF, office filtering, verified quotations and Find & Fix behavior are retained. Production disables preview, interactive API docs, local sources, in-process scheduling and development account utilities.
-
-`python -m backend.serve` listens on `0.0.0.0:$PORT` (8080 only as a fallback), with one worker, no reload, no application access logs, and no trust in client-supplied forwarded headers. Render terminates HTTPS. Secure `__Host-` session cookies remain HttpOnly and SameSite=Strict. The temporary Google-consent cookie is Secure/HttpOnly/SameSite=Lax so the callback can verify browser continuity; it does not authenticate application requests.
-
-A separate Docker **Cron Job**, every five minutes, runs `python -m backend.sync --if-due`. Administrator Re-sync requests increment a persistent database queue. The job also synchronizes when the last success is at least 23 hours old. It exits immediately when current. A database lease prevents overlapping publishers, and atomic publication retains the previous searchable generation after failures. Pending requests survive restarts and retry after failures; a request arriving during a run remains pending. A crashed run's lease expires after ten minutes. This schedule depends on the cron job being enabled and healthy; it is not an exact wall-clock daily schedule.
-
-Drive refresh tokens and PKCE verifiers are Fernet-encrypted in the private database. The encryption key and Web client secret are runtime secrets in Render, separate from the database. Access tokens exist only in backend memory. Consent validates Google account identity and performs metadata-only folder inventory before storing a grant. It does not ingest documents. All extraction, retrieval and discrepancy analysis remain local to your service; no external AI API receives document text or questions.
-
-## 1. Review and push the code safely
-
-Keep your existing local environment. Do not replace `.env`, change your local OAuth client, or run production commands against `backend/ace.db`.
-
-Run locally:
+Run from the repository root using your existing virtual environment:
 
 ```sh
+source .venv/bin/activate
 python scripts/check_deployment_source.py
 python -m pytest -q
 node --test tests/test_auth_client.cjs tests/test_employee_search_ui.cjs tests/test_admin_dashboard_ui.cjs
 git diff --check
 ```
 
-Use your existing activated virtual environment. The source audit reports filenames/categories only, never secret values. It checks current tracked/unignored files, not Git history or every possible secret format. Review staged changes and perform a full-history secret scan privately before pushing. `.gitignore` does not untrack an already committed secret; rotate any exposed credentials, remove them from history and caches using your organization's process, and verify before connecting Render. Never paste credentials, document contents or query bodies into a support chat.
+The audit reports filenames/categories only. It does not scan Git history or detect every secret. Review source and full Git history privately before connecting the private repository to Render. Remove and rotate any previously committed secret using your organization's process. Do not make the repository public. Commit/push reviewed code yourself only when ready; this guide performs neither operation.
 
-Commit the reviewed application/deployment changes, including all new `backend/*.py` modules, Docker files, tests and this guide, to the private repository and your selected release branch. Do not commit your `.env`, OAuth files, database, document exports, backups or bootstrap values. Do not make the repository public.
+Generate a small, wholly fictional corpus in a new temporary directory:
 
-The Docker build uses a deny-by-default `.dockerignore` and copies only Python application code, requirements, existing public frontend assets and the logo. It does not run application code, seed accounts, access Drive, copy `.git`, or read credentials. The Dockerfile declares no secret `ARG` and no secret `ENV`. Render translates service variables to build arguments, but this Dockerfile never references them; do not add such references, secret files, a `COPY . .`, or environment dumps. See [Render Docker behavior](https://render.com/docs/docker).
-
-If Docker is available, rehearse `docker build -t ace-render-check .` with no production secrets and inspect the image filesystem privately. This build is not required to change your local virtual environment. Rehearse release, OAuth and synchronization with a separate synthetic staging database/folder before using approved real data.
-
-## 2. Create persistent Postgres
-
-Render dashboard → **New → Postgres**:
-
-| Setting | Value |
-| --- | --- |
-| Name | `ace-production-db` |
-| Database | `ace` |
-| User | Let Render generate it |
-| Region | `Virginia` (`virginia`), subject to the owner's data-region approval; use the same region for all three resources |
-| PostgreSQL version | `17` |
-| Compute plan | Paid `0.1c-256mb` (legacy `basic-256mb`) or larger; select larger if rehearsal shows memory/storage pressure |
-| Initial storage | `5 GB` or larger after measuring the approved corpus |
-| External IP allow list | Empty list: disable all external database access |
-
-Enable and verify paid-plan recovery/backups; retain a separately approved encrypted backup and test restoration privately. Use the **Internal Database URL** for both services. The application adds `sslmode=require` on Render. Internal Render certificates are self-signed, so this supplies encryption without authenticated certificate verification; confirm that this meets your organization's database transport requirements. If authenticated TLS is mandatory, this configuration needs an approved database endpoint supporting verification before deployment. No persistent web disk is necessary. See [Render Postgres connections and TLS](https://render.com/docs/postgresql-creating-connecting).
-
-## 3. Create the Google Web client
-
-In the organization's Google Cloud project, enable **Google Drive API**. Configure Google Auth Platform consent as **Internal** for an eligible Workspace organization, or another organization-approved production audience/status. An External app in Testing is unsuitable for reliable long-running sync: this scope's testing refresh grant normally expires after seven days. Restricted-scope verification and data-handling requirements may apply; confirm them with the organization. See [Google token expiration](https://developers.google.com/identity/protocols/oauth2#expiration).
-
-Create an OAuth client of type **Web application**, dedicated to this hosted app. Add exactly this authorized redirect URI, substituting the actual Render hostname:
-
-```text
-https://YOUR-SERVICE.onrender.com/api/drive/oauth/callback
+```sh
+DEMO_DOCUMENT_DIR=$(mktemp -d /tmp/ace-fictional-demo.XXXXXX)
+export DEMO_DOCUMENT_DIR
+python scripts/create_synthetic_documents.py "$DEMO_DOCUMENT_DIR"
+python - <<'PY'
+import os
+from pathlib import Path
+from docx import Document
+root = Path(os.environ['DEMO_DOCUMENT_DIR'])
+for label, day in [('A', 'Monday'), ('B', 'Tuesday')]:
+    doc = Document()
+    doc.add_paragraph(f'Equipment inspection occurs every {day} before the fictional office opens.')
+    doc.save(root / f'Fictional Inspection {label}.docx')
+print('Fictional demo files created in:', root)
+PY
 ```
 
-Do not add localhost or a wildcard to the production client. No JavaScript origin is required because Google tokens are exchanged only by the server. The Render hostname must match `APP_ORIGIN`. If Render allocates a different name than requested, update both before authorization. Keep your existing Desktop client for development.
+This creates five documents: training DOCX, equipment PDF, intentionally unreadable PDF, and two conflicting inspection DOCX files. None is an Ace policy. Keep them outside Git and the container image. Upload **only those five PDF/DOCX files** through Google Drive's own interface into a new folder named `FICTIONAL DEMO ONLY` in a dedicated demo account. Do not upload the `.synthetic-only` marker, shortcuts, copied Ace policies or anything from the existing local corpus. Leave files at the folder root; recognized category subfolders can be used later. No browser-upload endpoint is added to the application.
 
-Give the approved Google account Viewer access to the approved folder; avoid broader Drive sharing. Record its exact email and root folder ID privately. Review the permitted category subfolders using the existing ingestion guide. The app requests only `https://www.googleapis.com/auth/drive.readonly`; it does not request write scope, change ACLs, or follow shortcuts.
+## 2. Prepare separate, free Google authorization
 
-## 4. Configure secrets and application variables
+The unchanged production app requires `KNOWLEDGE_SOURCE=drive` and valid Web OAuth configuration even for an initially empty demo. A free Google account's Drive storage and standard Drive API usage within quota are sufficient for these fixtures; no Workspace purchase, Google hosting, Cloud SQL, Cloud Run or service account is required. Use a separate demo project without a billing account. Google documents potential charges above API thresholds, so stay within the free quota and stop if billing is required: [Drive API limits/pricing](https://developers.google.com/workspace/drive/api/guides/limits).
 
-Create a Render **Environment Group** named `ace-production` and link it only to the production web service and sync cron job. Restrict Render workspace membership and enable account MFA. Add these variables through the dashboard, never via Git:
+1. Use a dedicated demo Google account containing only fictional material. Create a separate demo Google Cloud project; enable **Google Drive API** only.
+2. Configure Google Auth Platform with **External / Testing** and add that demo Google account as a test user. Do not add judges as Google test users: they use the application's employee/admin login. Testing refresh tokens for this scope normally expire in seven days; reconnect before rehearsal/presentation as necessary. Follow any Google consent or verification restrictions; do not bypass them. See [Google refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration).
+3. Create an OAuth client of type **Web application**, dedicated to this demo. Register exactly `https://YOUR-SERVICE.onrender.com/api/drive/oauth/callback`. Use the actual available service hostname; if it changes, update the client, Render configuration and operator shell, then reconnect.
+4. Record the demo account email, demo folder ID, new client ID and client secret privately. Do not reuse the existing Desktop client/token or Ace credentials. The app requests `drive.readonly`, which is account-wide API access; the app additionally enforces the approved folder tree, checks ancestry and ignores shortcuts. This is why the separate account matters.
 
-| Variable | Exact value/source |
-| --- | --- |
-| `APP_ENV` | `production` |
-| `APP_ORIGIN` | `https://YOUR-SERVICE.onrender.com` — exact origin, no trailing slash/path |
-| `DATABASE_URL` | The paid database's **Internal Database URL**; same database for both services |
-| `KNOWLEDGE_SOURCE` | `drive` |
-| `DRIVE_AUTH_MODE` | `oauth_web` |
-| `SYNC_EXECUTOR` | `database` |
-| `DRIVE_AUTHORIZED_EMAIL` | Exact organization-approved Google account email |
-| `DRIVE_KNOWLEDGE_FOLDER_ID` | Approved root folder ID, not its URL |
-| `DRIVE_WEB_CLIENT_ID` | New **Web application** client ID, ending `.apps.googleusercontent.com` |
-| `DRIVE_WEB_CLIENT_SECRET` | That Web client's secret |
-| `DRIVE_TOKEN_ENCRYPTION_KEY` | A newly generated Fernet key, identical on web and cron; keep an independent secure backup |
-
-Generate the encryption key privately with your existing Python environment:
+Generate a new encryption key privately in the activated environment:
 
 ```sh
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
-Copy the result directly into the Render environment group and your approved secret vault. Do not send the result here. Do not rotate/regenerate it on redeploy. This app already uses random opaque database sessions; there is no `SECRET_KEY` or JWT signing key to configure.
+Store it in your password manager and Render, not Git/chat. Reuse the same key for every operator command/redeploy. Refresh grants and consent verifiers are encrypted in the database; access tokens remain in backend memory.
 
-Render supplies `RENDER` and `PORT`; do not override them. Do **not** set `GOOGLE_APPLICATION_CREDENTIALS`, `DRIVE_OAUTH_CLIENT_FILE`, `DRIVE_OAUTH_TOKEN_FILE`, `SYNTHETIC_DOCUMENT_DIR`, Cloud SQL settings or `SYNC_JOB_RESOURCE` on Render. Do not upload any Desktop client/token, service-account JSON key, `.env` or document as a Render Secret File. Do not paste your entire local `.env` into Render.
+## 3. Exact database settings
 
-For the **first web release only**, add `BOOTSTRAP_ADMINS` directly to the **web service**, outside the shared group. Its value is a JSON array of exactly two real administrators:
-
-```json
-[{"id":"YOUR_ADMIN_1","name":"First authorized administrator","password":"REPLACE_WITH_DISTINCT_RANDOM_PASSWORD_1"},{"id":"YOUR_ADMIN_2","name":"Second authorized administrator","password":"REPLACE_WITH_DISTINCT_RANDOM_PASSWORD_2"}]
-```
-
-Replace every placeholder. Use distinct random passwords of 16–256 characters; deliver them privately. This is the explicit initial account provisioning mechanism, not test seeding. Existing administrator tables are not overwritten. Remove `BOOTSTRAP_ADMINS` from Render immediately after the first successful release. The web entrypoint removes it from its application environment and never uses it; deletion from Render is still required. Do not put this value in the cron job, an env example, shell history, build command, or Git.
-
-## 5. Exact Web Service settings
-
-Render → **New → Web Service** → connect GitHub using Render's GitHub app. Grant access to **only the private Ace repository**. Choose the reviewed release branch; no deploy key or GitHub token belongs in your repository. See [Render Git provider setup](https://render.com/docs/git-provider).
+When you choose to begin manual provisioning: Render dashboard → **New → Postgres**.
 
 | Setting | Value |
 | --- | --- |
-| Name | `ace-knowledge-assistant` (or available equivalent; use its actual hostname everywhere) |
-| Source | Your private GitHub repository, reviewed release branch |
-| Region | Same as Postgres |
-| Language / runtime | `Docker` |
+| Name | `ace-demo-db` |
+| Database | `ace_demo` |
+| User | Let Render generate it |
+| Region | `Virginia` (`virginia`); use the same region for web |
+| PostgreSQL version | `17` |
+| Compute plan | **Free** |
+| Storage | Included free 1 GB; no paid storage or autoscaling |
+| External access | Remove `0.0.0.0/0`; allow only your current public IPv4 with `/32` during operator commands, then remove all rules |
+
+Record the displayed expiration date; schedule the demonstration before it. The **Internal Database URL** belongs in Render. The **External Database URL** is used only from your computer. Never paste either URL into Git, commands containing literal passwords, chat, screenshots or logs. Render supports same-region internal connections with external access disabled. See [Postgres networking and access rules](https://render.com/docs/postgresql-creating-connecting).
+
+The existing Render adapter enforces `sslmode=require`: encrypted transport with no plaintext fallback. Internal TLS uses self-signed certificates, so this is not certificate identity verification. This preserves the existing adapter; it is suitable only within the approved fictional-demo boundary, not a claim that confidential deployment has been approved.
+
+## 4. Exact web settings and environment
+
+These are settings to prepare; **Create Web Service starts a deployment**. Complete the database initialization in section 5 before clicking it. Choose an available service name/hostname in advance and use it consistently. If the actual hostname differs, correct the origin/OAuth settings before attempting login/consent.
+
+Render → **New → Web Service**, private repository, reviewed release branch:
+
+| Setting | Exact value |
+| --- | --- |
+| Name | `ace-demo` (or available equivalent) |
+| Region | Same as database: Virginia |
+| Runtime / language | **Docker** |
 | Root Directory | Empty (repository root) |
 | Dockerfile Path | `./Dockerfile` |
 | Docker Build Context | `.` |
-| Build Command | Not applicable for Docker; leave unset |
-| Pre-Deploy Command | `python -m backend.release` |
-| Docker Command | `python -m backend.serve` (or blank to use identical Dockerfile CMD) |
+| Build Command | Unset; Docker builds the image. Dependency installation is `pip install --no-cache-dir -r backend/requirements.txt` inside the Dockerfile |
+| Pre-Deploy Command | **Empty**; not available on Free |
+| Docker Command | `python -m backend.serve` (also the Dockerfile default) |
 | Health Check Path | `/readyz` |
-| Compute plan | Paid `1c-2g` (1 CPU / 2 GB; legacy `Standard`) initially; downsize only after corpus/Find & Fix rehearsal |
+| Compute plan | **Free** |
 | Instances | `1` |
-| Auto-Deploy | `Off` |
-| Pull request previews | Disabled; never clone production data/secrets into previews |
+| Auto-Deploy | **Off** |
+| Pull request previews | Disabled |
 | Persistent disk | None |
-| Environment | Link `ace-production`; add first-release `BOOTSTRAP_ADMINS` only here |
 
-The paid pre-deploy command performs an explicit additive, versioned schema migration under a PostgreSQL advisory lock, configures the approved folder, optionally bootstraps the initial two real administrators, and verifies prerequisites before traffic starts. Startup performs no schema changes and never seeds accounts. A wrong origin, missing runtime settings, missing schema/admins, or a mismatched approved folder stops startup. `/healthz` is liveness; `/readyz` checks database/schema readiness without exposing document metadata. The plan IDs above follow [Render's current compute-plan names](https://render.com/docs/compute-plans).
+Set only these application variables through the dashboard, directly on this demo service:
 
-After completing the privacy/logging prerequisites and reviewing all values, **you** may initiate the manual deployment. This preparation has not initiated it. Remove the bootstrap variable after success and manually deploy again. Log in and create real employees or judge accounts via Employee Management, delivering generated PINs privately.
-
-This provisions a separate production database and leaves local accounts, documents, OAuth and development data untouched. It does not silently transfer your local SQLite data or published test accounts. If existing real account records must be retained on the initial move, stop before bootstrapping and arrange a private, reviewed SQLite-to-Postgres data migration with the owner, preserving Argon2 hashes and office mappings and excluding development fixtures/sessions. Rebuild the document index from the approved Drive folder. Never upload your local database to GitHub or the Docker image.
-
-## 6. Connect Google and create the scheduled job
-
-Sign in at `https://YOUR-SERVICE.onrender.com/admin-login.html`. Open **Knowledge Management → Connect Google Drive**. Complete Google consent with the configured team account in the same browser. The callback verifies the initiating administrator remains active, the Google email matches and the approved folder is accessible. Follow **Return to Knowledge Management** on the completion page; this preserves Strict session cookies without weakening them. Denied consent, expired session/state, wrong account, missing offline grant, incorrect callback or restricted scope produces a generic failure. Reconnect after correcting the configuration. Never copy a code or token into the browser console or this chat.
-
-Then Render → **New → Cron Job**:
-
-| Setting | Value |
+| Variable | Value |
 | --- | --- |
-| Name | `ace-drive-sync` |
-| Source and branch | Same private repository and reviewed commit as the web service |
-| Region | Same as web/Postgres |
-| Language | `Docker` |
-| Root Directory | Empty |
-| Dockerfile Path / Context | `./Dockerfile` / `.` |
-| Schedule | `*/5 * * * *` (UTC) |
-| Docker Command (Advanced) | `python -m backend.sync --if-due` — mandatory override of the web CMD |
-| Compute plan | `1c-2g` (legacy `Standard`) initially, to allow document extraction and discrepancy analysis memory |
-| Auto-Deploy | `Off` |
-| Environment | Link the **same** `ace-production` group; no bootstrap variable |
-| Persistent disk | None |
+| `APP_ENV` | `production` (also for this demo; never `development`) |
+| `APP_ORIGIN` | `https://YOUR-SERVICE.onrender.com`, exact hostname, no trailing slash |
+| `DATABASE_URL` | Demo database's **Internal Database URL** |
+| `KNOWLEDGE_SOURCE` | `drive` |
+| `DRIVE_AUTH_MODE` | `oauth_web` |
+| `SYNC_EXECUTOR` | `database` (durable requests; manual operator consumes them) |
+| `DRIVE_AUTHORIZED_EMAIL` | Dedicated demo Google account email |
+| `DRIVE_KNOWLEDGE_FOLDER_ID` | New fictional-demo folder ID |
+| `DRIVE_WEB_CLIENT_ID` | New demo Web client ID ending `.apps.googleusercontent.com` |
+| `DRIVE_WEB_CLIENT_SECRET` | New demo Web client secret |
+| `DRIVE_TOKEN_ENCRYPTION_KEY` | New demo Fernet key generated above |
 
-Use the cron job's **Runs** tab to verify execution. The application schedules daily work by last-success age and durable requests; the five-minute cron is the dispatcher. In the dashboard, save the approved folder if needed, then select **Re-sync now**. Expect processing on the next cron tick, usually within five minutes. A 202 response means queued, not completed. Require `sync_status=succeeded`, a recent `last_success`, and the expected indexed/unreadable counts before claiming success. Review metadata privately; do not paste document contents into logs or support. Find & Fix is generated atomically with the current index.
+Render supplies `RENDER` and `PORT`; do not override them on the service. No `SECRET_KEY` or JWT key is used. Do not set `BOOTSTRAP_ADMINS` on Render; setup is performed only by the local release command below. Do not import `.env`, upload secret files or set `GOOGLE_APPLICATION_CREDENTIALS`, Desktop OAuth paths, `SYNTHETIC_DOCUMENT_DIR`, Cloud SQL variables or `SYNC_JOB_RESOURCE`.
 
-Do not click **Trigger Run** while a cron execution is active: Render cancels the existing run when manually triggering another. The database lease protects publication, but a cancelled run can delay a retry until lease expiry. Render also queues scheduled executions behind an active run. See [Render cron behavior](https://render.com/docs/cronjobs).
+The Docker context is deny-by-default and copies only application Python, requirements, public frontend assets and the logo. Keep `.dockerignore` intact: no `COPY . .`, local documents, databases, tokens or secret build arguments. The frontend and API share one HTTPS origin, so no CORS or separate static hosting is required.
 
-## 7. Release checklist before sharing with judges
+## 5. Explicit database initialization from your computer
 
-- [ ] Organization approved Render, region, consent audience, approved folder/account, retention, and platform log exclusions; no PHI or unapproved documents.
-- [ ] Repository stays private; staged files and history scanned; no credentials, source documents, databases or backups in Git/build context/image layers.
-- [ ] Web and cron use the same paid private Postgres and encryption key; public database access is disabled; backups and restore tested.
-- [ ] Pre-deploy release succeeds; two real administrators can sign in; known development identities cannot sign in; bootstrap secret removed from Render.
-- [ ] Google consent uses the Web client, correct HTTPS redirect, approved email and read-only scope; refresh works across a service restart without browser interaction.
-- [ ] `/readyz` returns 200; HTTPS cookies are Secure/HttpOnly/Strict; unknown hosts, preview routes, external origins and missing CSRF tokens are rejected; `/docs` is unavailable.
-- [ ] Employee and admin sign-in URLs work in a private/incognito browser; employees cannot access administrator APIs/pages; deactivation/PIN reset invalidates existing sessions; two-admin minimum holds.
-- [ ] Search returns verified sources for approved synthetic checks in each office/category; office selection and Lilburn's ADC alias work; unreadable documents stay excluded; privacy warning remains visible.
-- [ ] Find & Fix Log lists supported issues, exact quotation pairs, offices and human review instructions; no automatic policy correction.
-- [ ] Cron succeeds; Re-sync requests execute; revoked/expired Drive grants fail safely and retain the prior index; expired/crashed leases permit recovery; queued requests survive web restart.
-- [ ] Manually redeploy web and cron at the same reviewed commit, then verify account/office changes, the existing index and administrator data survived; verify another scheduled sync.
-- [ ] Application, edge, database and any attached monitoring logs contain no questions, answers, quotations, document content, credentials, callback codes or tokens. Use fictional sentinels to verify; do not test logging with real private data.
-- [ ] Configure an organization-approved perimeter rate limit for login identifier spraying and non-content operational alerts. Review DB login lockouts, cron failures, stale `last_success`, storage and backup health. Expired sessions/old login-attempt records have an approved cleanup/retention schedule.
-- [ ] Set judge accounts to the least role needed, share PINs/passwords privately, and plan deactivation and data cleanup after the event.
+Free services lack shell access, one-off jobs and pre-deploy commands. Run the existing release command locally against the **new empty demo PostgreSQL**, without changing the application entrypoint, enabling development mode or using the local fixture-account seed.
 
-Share these two addresses only after the checklist passes:
+Temporarily allow only your public IP in the database access rules. Open a separate clean zsh shell so existing Ace environment values cannot carry over. These commands are for macOS/zsh, from this repository root:
 
-```text
-Employee:      https://YOUR-SERVICE.onrender.com/login.html
-Administrator: https://YOUR-SERVICE.onrender.com/admin-login.html
+```sh
+env -i HOME="$HOME" PATH="$PATH" TERM="${TERM:-xterm}" /bin/zsh -f
+cd /Users/royce/ace_knowledge_assistant
+source .venv/bin/activate
+export APP_ENV=production
+export RENDER=true
+export KNOWLEDGE_SOURCE=drive
+export DRIVE_AUTH_MODE=oauth_web
+export SYNC_EXECUTOR=database
+export APP_ORIGIN=https://YOUR-SERVICE.onrender.com
+export DRIVE_AUTHORIZED_EMAIL=YOUR_DEMO_ACCOUNT_EMAIL
+export DRIVE_KNOWLEDGE_FOLDER_ID=YOUR_DEMO_FOLDER_ID
+export DRIVE_WEB_CLIENT_ID=YOUR_DEMO_WEB_CLIENT_ID.apps.googleusercontent.com
+read -rs 'DATABASE_URL?Paste demo EXTERNAL Database URL (hidden): '
+export DATABASE_URL
+print
+read -rs 'DRIVE_WEB_CLIENT_SECRET?Paste demo Web client secret (hidden): '
+export DRIVE_WEB_CLIENT_SECRET
+print
+read -rs 'DRIVE_TOKEN_ENCRYPTION_KEY?Paste the saved demo Fernet key (hidden): '
+export DRIVE_TOKEN_ENCRYPTION_KEY
+print
 ```
 
-These are separate login pages for the existing roles, not separate origins or separate Google logins. Both lead to the same protected application and API. Judges receive only access approved by the document owner.
+Replace the four nonsecret placeholders with the same values prepared for Render. The URL must be the newly created demo database, not a production database; keep its full hostname. Leave `sslmode` absent or set to `require`; the adapter adds/enforces `require`. `RENDER=true` in this operator shell deliberately applies the same Render production guards/TLS policy. No command loads `.env`.
 
-## Operations, revocation, rotation and rollback
+For the **first initialization only**, run this wrapper around `backend.release`. It creates exactly two fictional administrators using privately chosen passwords (distinct, 16–256 characters); prompts do not echo credentials or store them in shell history:
 
-Keep automatic deploys and production previews off. Back up before schema changes; pause cron and wait for any active sync to finish, manually deploy the reviewed web/cron commit together, then resume cron. Release configuration refuses to change a folder during an active synchronization; retry after it completes or the crashed lease expires. Migrations are additive but an old image may reject a newer schema revision. Never blindly downgrade schema, delete the production database or reseed. Rehearse rollback using a restored private database and compatible code. Render database deletion removes recovery data; backups must be retained independently as policy requires.
+```sh
+python - <<'PY'
+import getpass
+import json
+import os
+from backend.release import main
+entries = []
+for identifier, name in [('demo-morgan', 'Morgan Fictional Demo'),
+                         ('demo-avery', 'Avery Fictional Demo')]:
+    password = getpass.getpass(f'New private password for {identifier}: ')
+    confirmation = getpass.getpass('Confirm password: ')
+    if password != confirmation or not 16 <= len(password) <= 256:
+        raise SystemExit('Passwords must match and contain 16–256 characters.')
+    entries.append({'id': identifier, 'name': name, 'password': password})
+if entries[0]['password'] == entries[1]['password']:
+    raise SystemExit('Choose distinct passwords.')
+os.environ['BOOTSTRAP_ADMINS'] = json.dumps(entries)
+raise SystemExit(main())
+PY
+```
 
-If Google access expires or is revoked, an administrator reconnects through Knowledge Management. Existing search retains the previous successful index while sync reports failure; revoke employee/judge access if that retained corpus is no longer authorized. To disconnect, disable the sync cron, revoke the app grant in the approved Google account's security settings, and remove the encrypted `drive_grant` and outstanding `drive_consent` rows through an authorized private database session. Revoke application sessions/accounts and apply the organization's document/index/backup deletion procedure if the hosting authorization ends. Revocation alone does not erase previously indexed text.
+Require exit status 0 and `Production schema and administrator prerequisites verified.` before creating the web service. The release migrates under the existing PostgreSQL advisory lock, initializes office/queue state, configures the demo folder and uses the existing administrator bootstrap/hash path. It does not contact Google or import documents. Never run `backend.seed_test_accounts` against the hosted database; its published local passwords are unsuitable for the public demo.
 
-For client-secret, account, origin or approved-folder changes, update both services and the Google configuration, run the release command via a manual web deploy, and reconnect. Changing the approved folder clears the active generation through explicit release configuration; old snapshots are removed after a successful new sync. To rotate the encryption key, stop sync, deploy the new key to both services, reconnect to replace the encrypted grant, and resume sync. The old grant cannot decrypt under the new key; keep the previous key in the approved vault only for approved backup recovery. Do not rotate a key by regenerating it independently on each service.
+For subsequent reviewed schema releases, in the same clean configured operator environment, run only:
 
-Keep HTTP wire debugging, SQL parameter tracing, APM body/header capture and document/query logging disabled. Diagnose using fixed failure categories, readiness, run exit status and private configuration review. Credentials and confidential documents should never be shared with the coding assistant for troubleshooting.
+```sh
+python -m backend.release
+```
 
-## Validation limits of this preparation
+This is also the explicit initialization retry after successful bootstrap; it preserves existing accounts. Do not change the Docker Command to run migrations or seed accounts on every restart. Remove all external database IP rules after each operation. Exit the clean shell when finished; repeat the clean-shell configuration when needed later.
 
-Local verification on November 8, 2026: **455 Python tests passed** (six dependency deprecation warnings), **32 frontend tests passed**, the current-source audit passed, and `git diff --check` passed. A read-only scan of all 142 blobs in the non-shallow local repository's reachable history found no private-artifact or known-secret-pattern findings using the source audit's suffix/pattern rules. This limited scan is not a comprehensive secret/privacy audit. These checks did not load the local `.env`, access Drive, or ingest private documents. The local environment uses Python 3.14, while the Dockerfile uses Python 3.12; the Docker image build remains unverified because the local Docker daemon is not running.
+## 6. Manual first deployment and working logins
 
-Automated tests use temporary SQLite fixtures, fictional credentials, mocked Google APIs and empty/synthetic inventories. They cover production configuration boundaries, cookie/CSRF/role behavior, Web OAuth state/PKCE/account binding, encrypted token storage, replay denial, durable queue retries, additive migrations and existing application regressions. They do not prove Workspace approval, Render edge/database logging settings, Google production verification, a live PostgreSQL migration, image build compatibility or deployed persistence. Complete the synthetic staging rehearsal and host checks above before production use.
+After successful initialization and review of every setting, **you** can click **Create Web Service**. Later releases use **Manual Deploy → Deploy latest commit** with Auto-Deploy still Off. No hook, CI deployment or API deployment command is configured here.
+
+1. Wait for `/readyz` to return HTTP 200. `/healthz` checks process liveness only. On configuration/migration failure, fix values or run the explicit release; do not weaken guards.
+2. Open `https://YOUR-SERVICE.onrender.com/admin-login.html`. Sign in as `demo-morgan` with its private password, then separately verify `demo-avery`.
+3. In Employee Management create `DEMO-ALP-01` / `Jordan Fictional Demo` / `Alpharetta`, and `DEMO-NOR-01` / `Riley Fictional Demo` / `Norcross`. Save each generated eight-digit PIN privately when its one-time dialog appears. Use the normal reset action if missed. No fixed demo PIN or authentication bypass is introduced.
+4. In a separate browser profile/private window, open `https://YOUR-SERVICE.onrender.com/login.html` and sign in with an employee ID and its generated PIN. Verify the expected home office. One browser profile shares a single account session, so switching accounts there replaces its previous login.
+5. From admin Knowledge Management, connect **only the dedicated demo Google account**. Google consent verifies identity and folder inventory; consent itself does not ingest documents. Cancel if the selected account/folder contains real material.
+6. Click **Re-sync**. Complete the manual sync procedure below, then refresh Knowledge Management and Find & Fix Log. Do not present the queued response as a finished synchronization.
+
+Logins work before ingestion; employee search will have no approved results until the first successful sync. No standalone frontend upload, synthetic preview, hard-coded hosted credentials or local-document mode is enabled.
+
+## 7. Manual Google Drive synchronization — no scheduled service
+
+There is **no scheduled synchronization on this free deployment**. Re-sync buttons return HTTP 202 and queue a request in PostgreSQL; they cannot execute it alone. The UI's existing “scheduled” message means queued, not that a cron job exists. Explain this to demonstration administrators.
+
+After Google authorization, temporarily allow your operator IP again. In the clean shell from section 5 (same demo OAuth configuration and key, **External** Database URL), run:
+
+```sh
+python -m backend.sync --if-due
+```
+
+This consumes pending requests and records their completion after successful publication. With no pending request it also runs if the last success is at least 23 hours old. It is a single invocation that exits, **not a scheduler**. To force a manual refresh without clicking Re-sync, run:
+
+```sh
+python -m backend.sync
+```
+
+The forced command updates the index but does not acknowledge queue counters; use `--if-due` after a dashboard request. Require `Synchronization succeeded.` and verify the new last-success timestamp/document counts in the dashboard. Failures retain the previous index; correct authorization or configuration, then retry. Remove all external IP rules and exit the clean shell afterward.
+
+This runs the existing Drive adapter, extraction, ranking/indexing, quotation verification, discrepancy scan, lease and atomic publication. No document/query text goes to an external AI model. Synchronization executes on your computer and writes the demo index to PostgreSQL; it is not performed inside the sleeping web service. Never schedule this against real Ace data. A free external scheduler could be engineered separately, but is not configured or required here. Reliable Render-managed scheduled execution would require paid compute and remains excluded.
+
+## 8. Rehearsal, privacy and retirement
+
+Before sharing the link:
+
+- Verify both administrator logins and both employees; verify wrong credentials fail, employees cannot open admin APIs, logout revokes access, and fewer than two active admins cannot be left.
+- Verify successful search for `When do employees complete telescope orientation?` and Norcross's fictional assembly point. Confirm exact quotes, filenames/headings/pages and office filtering. Use All Categories for the root-level fixture files.
+- Check the intentionally unreadable PDF in Unreadable Files. Ask `When does equipment inspection occur?`; inspect the fictional contradictory evidence in Find & Fix Log. Managers choose corrections; the application must not choose the “correct” policy automatically. Correct a fictional source in Drive and repeat manual sync to demonstrate resolution.
+- Verify mobile login/search, dashboard navigation, one-time PIN handling and the manual Re-sync workflow. Test a manual web restart: accounts and the published index must persist. Rehearse after idle sleep and open the site shortly before presenting; do not promise immediate cold responses or use keep-alive automation.
+- Check free resource usage and expiration. If the process runs out of memory, reduce only the fictional corpus/concurrent presentation load; retain hashing strength and all security controls. Do not select a paid plan to fix it.
+
+Production behavior stays enabled: HTTPS origin/Host checks, Secure HttpOnly SameSite=Strict `__Host-` session cookie, server-side hashed opaque sessions, session-bound CSRF, role checks, login lockouts, Argon2id, credential/session invalidation, two-admin guard, office restrictions and disabled preview/API docs. Web OAuth retains state, PKCE, one-use browser continuity and encrypted grants. The temporary OAuth consent cookie alone uses SameSite=Lax. Application access logs are disabled and private errors suppressed.
+
+Provider logs are separate: verify that edge/database logs exclude credential bodies, OAuth callback query strings, document/query contents and bound values. Existing local production privacy/logging approval requirements remain unresolved until verified with the host; fictional data does not justify exposing credentials. No PHI, real employees, real Ace policies or production grants belong in this demo. Restrict Render/repository access and enable MFA. Preserve private credential delivery and expired-session/login-attempt cleanup obligations from the application's operational policy.
+
+Before database expiry, retire the demo or explicitly rebuild it on an eligible Free database: initialize schema/admins anew, update both connection URLs, create employees through the dashboard, reconnect the demo Drive account and re-sync. Old sessions and generated PINs do not transfer. Do not copy the real/local database to recover a demo. Reproducible fictional fixtures replace the need for a paid backup service. After the presentation, manually remove demo services/database and revoke the demo Google grant/client if no longer needed; this plan does not delete anything automatically.
+
+Local tests validate application behavior, not Render availability, Google consent permissions, provider logs or measured free-instance capacity. A live manual rehearsal is still required. No cloud action is authorized or executed by applying this documentation change.
+
+Preparation verification on November 8, 2026: **455 backend tests and 32 frontend tests passed** (existing dependency deprecation warnings only). Current-source audit and `git diff --check` passed. All documented zsh blocks and embedded Python parsed successfully. The exact documented fictional generator was exercised with a temporary SQLite database and the existing development-only source adapter: four documents indexed, one intentionally unreadable, orientation search succeeded, and inspection search/Find & Fix reported verified contradictory evidence. No real corpus, existing database or credentials were used in that fixture check. No application/security code was changed.

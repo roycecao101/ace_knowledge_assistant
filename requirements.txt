@@ -1,0 +1,2 @@
+# Vercel installs dependencies from the repository root. Render keeps its manifest.
+-r backend/requirements.txt

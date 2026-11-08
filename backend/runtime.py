@@ -9,16 +9,20 @@ def production():
 
 
 def validate_environment(*, web=False):
-    if (os.getenv('RENDER') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')) and not production():
+    if (os.getenv('VERCEL') or os.getenv('RENDER') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')) and not production():
         raise RuntimeError('Hosted services require APP_ENV=production.')
     if not production():
         return
+    if os.getenv('VERCEL_ENV') == 'preview':
+        raise RuntimeError('Production data must not be used in Vercel preview deployments.')
     from .drive_auth import auth_mode
     mode = auth_mode()
     if mode not in ('adc', 'oauth_web') or os.getenv('KNOWLEDGE_SOURCE') != 'drive':
         raise RuntimeError('Production requires hosted Drive authorization and KNOWLEDGE_SOURCE=drive.')
     if os.getenv('RENDER') and (mode != 'oauth_web' or os.getenv('SYNC_EXECUTOR') != 'database'):
         raise RuntimeError('Render requires DRIVE_AUTH_MODE=oauth_web and SYNC_EXECUTOR=database.')
+    if os.getenv('VERCEL') and (mode != 'oauth_web' or os.getenv('SYNC_EXECUTOR') != 'database'):
+        raise RuntimeError('Vercel requires DRIVE_AUTH_MODE=oauth_web and SYNC_EXECUTOR=database.')
     if any(os.getenv(key) for key in (
         'GOOGLE_APPLICATION_CREDENTIALS', 'DRIVE_OAUTH_CLIENT_FILE',
         'DRIVE_OAUTH_TOKEN_FILE', 'SYNTHETIC_DOCUMENT_DIR',
@@ -46,5 +50,5 @@ def validate_environment(*, web=False):
 
 def development_only():
     if (os.getenv('APP_ENV', 'development') != 'development' or os.getenv('RENDER')
-            or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')):
+            or os.getenv('VERCEL') or os.getenv('K_SERVICE') or os.getenv('CLOUD_RUN_JOB')):
         raise RuntimeError('This utility is restricted to local development.')
