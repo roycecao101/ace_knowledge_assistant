@@ -1,2 +1,7 @@
 [tool.vercel]
 entrypoint = "backend.main:app"
+
+# Frontend responses use application middleware and dashboard session checks.
+# Skip build-time static discovery; frontend/** stays in the function bundle.
+[tool.vercel.fastapi.static]
+cdn = false

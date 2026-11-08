@@ -26,6 +26,22 @@ or a Vercel build. Only existing dependency deprecation warnings were observed.
 Vercel documents its [FastAPI entrypoint, lifespan, static handling and function configuration](https://vercel.com/docs/frameworks/backend/fastapi).
 Render documents [external PostgreSQL URLs, TLS and network access rules](https://render.com/docs/postgresql-creating-connecting).
 
+### Static file collection warning
+
+`Warning: FastAPI static file collection failed. Static files will not be served
+from the CDN.` comes from Vercel's build-time application import for static
+discovery. It does not by itself identify the underlying import error or mean
+the frontend files are missing. This application serves frontend files through
+FastAPI `FileResponse` routes, with middleware and dashboard session checks.
+`[tool.vercel.fastapi.static] cdn = false` in `pyproject.toml` explicitly disables
+CDN collection. `frontend/**` remains included in the function bundle.
+
+Redeploy after this configuration change. Verify `/login.html`, `/style.css`,
+and `/assets/ace-logo.webp` load and unauthenticated `/index.html` and
+`/admin.html` redirect to their login pages. If the function returns 500/503,
+inspect runtime logs for the sanitized startup error and required production
+settings; disabling static collection does not repair runtime configuration.
+
 ## Resource assessment
 
 Current standard [Vercel function limits](https://vercel.com/docs/functions/limitations)
