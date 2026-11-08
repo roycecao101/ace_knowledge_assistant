@@ -1,5 +1,7 @@
 """Vercel adapter regression checks. No cloud resources or credentials used."""
-import importlib
+import ast
+import json
+import tomllib
 import os
 from pathlib import Path
 import subprocess
@@ -28,7 +30,7 @@ def test_fresh_vercel_import_and_safe_missing_settings():
                            'SYNTHETIC_DOCUMENT_DIR'}}
     env.update(VERCEL='1', VERCEL_ENV='production')
     root = Path(__file__).resolve().parents[1]
-    failed = subprocess.run([sys.executable, '-c', 'import main'], cwd=root,
+    failed = subprocess.run([sys.executable, '-c', 'import backend.main'], cwd=root,
                             env=env, capture_output=True, text=True)
     assert failed.returncode != 0
     assert 'Missing required settings: APP_ENV, APP_ORIGIN, DATABASE_URL' in failed.stderr
@@ -40,7 +42,7 @@ def test_fresh_vercel_import_and_safe_missing_settings():
                DRIVE_WEB_CLIENT_ID='fictional.apps.googleusercontent.com',
                DRIVE_WEB_CLIENT_SECRET='private-client-secret',
                DRIVE_TOKEN_ENCRYPTION_KEY='invalid-private-key')
-    failed = subprocess.run([sys.executable, '-c', 'import main'], cwd=root,
+    failed = subprocess.run([sys.executable, '-c', 'import backend.main'], cwd=root,
                             env=env, capture_output=True, text=True)
     assert failed.returncode != 0
     assert 'Startup failed (DriveAuthError)' in failed.stderr
@@ -48,8 +50,9 @@ def test_fresh_vercel_import_and_safe_missing_settings():
         assert value not in failed.stderr
     from cryptography.fernet import Fernet
     env['DRIVE_TOKEN_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
+    env['BOOTSTRAP_ADMINS'] = 'must-never-be-consumed-by-web'
     imported = subprocess.run(
-        [sys.executable, '-c', 'from main import app; from fastapi import FastAPI; assert isinstance(app, FastAPI)'],
+        [sys.executable, '-c', 'from backend.main import app; from fastapi import FastAPI; import os; assert isinstance(app, FastAPI); assert "BOOTSTRAP_ADMINS" not in os.environ; from main import app as compatibility; assert compatibility is app'],
         cwd=root, env=env, capture_output=True, text=True)
     assert imported.returncode == 0, imported.stderr
 
@@ -111,14 +114,8 @@ def test_vercel_entrypoint_routes_roles_csrf_and_durable_sync(hosted, monkeypatc
     monkeypatch.setenv('APP_ENV', 'production')
     monkeypatch.setenv('VERCEL', '1')
     monkeypatch.setenv('VERCEL_ENV', 'production')
-    monkeypatch.setenv('BOOTSTRAP_ADMINS', 'must-never-be-consumed-by-web')
     with patch('backend.main.database', return_value=(hosted.state.engine, hosted.state.factory)):
         production = create_app()
-    with patch('backend.main.app', production):
-        entry = importlib.import_module('main')
-        assert entry.app is production
-    import os
-    assert 'BOOTSTRAP_ADMINS' not in os.environ
     with TestClient(production, base_url='https://testserver') as client:
         for path in ('/login.html', '/admin-login.html', '/login.js', '/style.css', '/assets/ace-logo.webp'):
             response = client.get(path)
@@ -153,3 +150,21 @@ def test_vercel_entrypoint_routes_roles_csrf_and_durable_sync(hosted, monkeypatc
             assert db.scalar(select(SyncRequest.requested)) == 1
         assert client.post('/api/admin/sync', headers={'origin': 'https://evil.test'}).status_code == 403
         assert client.post('/api/admin/drive/connect').status_code == 200
+
+
+def test_vercel_configuration_selects_backend_without_routing_overrides():
+    root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((root / 'pyproject.toml').read_text())
+    assert config['tool']['vercel']['entrypoint'] == 'backend.main'
+    deployment = json.loads((root / 'vercel.json').read_text())
+    assert deployment['framework'] == 'fastapi'
+    assert not {'builds', 'routes', 'rewrites', 'redirects', 'outputDirectory'} & deployment.keys()
+    assert set(deployment['functions']) == {'backend/main.py'}
+    assert deployment['functions']['backend/main.py']['includeFiles'] == 'frontend/**'
+    module = ast.parse((root / 'backend/main.py').read_text())
+    # Vercel must see the app assignment directly at module scope.
+    assignments = [node for node in module.body if isinstance(node, ast.Assign)]
+    assert any(any(isinstance(target, ast.Name) and target.id == 'app'
+                   for target in node.targets)
+               and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+               and node.value.func.id == '_startup_app' for node in assignments)
