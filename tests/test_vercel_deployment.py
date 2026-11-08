@@ -28,12 +28,17 @@ def test_fresh_vercel_import_and_safe_missing_settings():
            and key not in {'DATABASE_URL', 'KNOWLEDGE_SOURCE', 'SYNC_EXECUTOR',
                            'RENDER', 'K_SERVICE', 'GOOGLE_APPLICATION_CREDENTIALS',
                            'SYNTHETIC_DOCUMENT_DIR'}}
-    env.update(VERCEL='1', VERCEL_ENV='production')
+    env.update(VERCEL='1', VERCEL_ENV='production', APP_ENV='production')
     root = Path(__file__).resolve().parents[1]
-    failed = subprocess.run([sys.executable, '-c', 'import backend.main'], cwd=root,
+    imported = subprocess.run(
+        [sys.executable, '-c', 'from backend.main import app; from main import app as alias; assert alias is app; assert not hasattr(app.state, "engine")'],
+        cwd=root, env=env, capture_output=True, text=True)
+    assert imported.returncode == 0, imported.stderr
+    startup = 'from backend.main import app; from fastapi.testclient import TestClient; TestClient(app).__enter__()'
+    failed = subprocess.run([sys.executable, '-c', startup], cwd=root,
                             env=env, capture_output=True, text=True)
     assert failed.returncode != 0
-    assert 'Missing required settings: APP_ENV, APP_ORIGIN, DATABASE_URL' in failed.stderr
+    assert 'Missing required settings: APP_ORIGIN, DATABASE_URL' in failed.stderr
     env.update(APP_ENV='production', APP_ORIGIN='https://example.test',
                DATABASE_URL='postgresql://fictional:private-password@db.render.com/ace',
                KNOWLEDGE_SOURCE='drive', DRIVE_AUTH_MODE='oauth_web',
@@ -42,7 +47,7 @@ def test_fresh_vercel_import_and_safe_missing_settings():
                DRIVE_WEB_CLIENT_ID='fictional.apps.googleusercontent.com',
                DRIVE_WEB_CLIENT_SECRET='private-client-secret',
                DRIVE_TOKEN_ENCRYPTION_KEY='invalid-private-key')
-    failed = subprocess.run([sys.executable, '-c', 'import backend.main'], cwd=root,
+    failed = subprocess.run([sys.executable, '-c', startup], cwd=root,
                             env=env, capture_output=True, text=True)
     assert failed.returncode != 0
     assert 'Startup failed (DriveAuthError)' in failed.stderr
@@ -55,6 +60,11 @@ def test_fresh_vercel_import_and_safe_missing_settings():
         [sys.executable, '-c', 'from backend.main import app; from fastapi import FastAPI; import os; assert isinstance(app, FastAPI); assert "BOOTSTRAP_ADMINS" not in os.environ; from main import app as compatibility; assert compatibility is app'],
         cwd=root, env=env, capture_output=True, text=True)
     assert imported.returncode == 0, imported.stderr
+    env['VERCEL_ENV'] = 'preview'
+    preview = subprocess.run([sys.executable, '-c', startup], cwd=root,
+                             env=env, capture_output=True, text=True)
+    assert preview.returncode != 0
+    assert 'Startup failed (RuntimeError)' in preview.stderr
 
 
 def test_vercel_rejects_development_utilities_and_preview(hosted, monkeypatch):
@@ -114,8 +124,8 @@ def test_vercel_entrypoint_routes_roles_csrf_and_durable_sync(hosted, monkeypatc
     monkeypatch.setenv('APP_ENV', 'production')
     monkeypatch.setenv('VERCEL', '1')
     monkeypatch.setenv('VERCEL_ENV', 'production')
-    with patch('backend.main.database', return_value=(hosted.state.engine, hosted.state.factory)):
-        production = create_app()
+    monkeypatch.setattr('backend.main.database', lambda url: (hosted.state.engine, hosted.state.factory))
+    production = create_app(defer_initialization=True)
     with TestClient(production, base_url='https://testserver') as client:
         for path in ('/login.html', '/admin-login.html', '/login.js', '/style.css', '/assets/ace-logo.webp'):
             response = client.get(path)

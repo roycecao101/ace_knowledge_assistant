@@ -90,11 +90,21 @@ class Search(BaseModel):
     office: str
     category: str
 
-def create_app(url=None):
-    validate_environment(web=True)
-    auth_mode()  # Reject desktop OAuth in hosted/production configuration at startup.
+def create_app(url=None, *, defer_initialization=False):
+    engine = factory = None
+
+    def initialize():
+        nonlocal engine, factory
+        validate_environment(web=True)
+        auth_mode()  # Reject local OAuth before any request can be served.
+        engine, factory = database(url)
+        app.state.engine, app.state.factory = engine, factory
+        app.state.sync = SyncService(factory)
+
     @asynccontextmanager
     async def lifespan(app):
+        if defer_initialization:
+            _checked_startup(initialize)
         if production:
             try:
                 if not schema_ready(app.state.engine):
@@ -107,6 +117,7 @@ def create_app(url=None):
                     if not state or state.folder_id != os.environ['DRIVE_KNOWLEDGE_FOLDER_ID']:
                         raise RuntimeError('Approved folder changed; execute the release command')
             except Exception:
+                engine.dispose()
                 raise RuntimeError('Production is not ready. Check database connectivity and execute the release command.') from None
         logger.info('Knowledge APIs registered: GET /api/admin/knowledge, GET /api/admin/documents, POST /api/admin/sync, PATCH /api/admin/settings')
         logger.info('Knowledge runtime: source=%s, auth=%s, environment=%s, project_venv=%s',
@@ -147,15 +158,10 @@ def create_app(url=None):
     production = os.getenv('APP_ENV', 'development') == 'production'
     app = FastAPI(lifespan=lifespan, docs_url=None if production else '/docs',
                   redoc_url=None if production else '/redoc', openapi_url=None if production else '/openapi.json')
-    engine, factory = database(url)
-    app.state.engine, app.state.factory = engine, factory
-    app.state.sync = SyncService(factory)
+    if not defer_initialization:
+        initialize()
     production = os.getenv('APP_ENV', 'development') == 'production'
     origin = os.getenv('APP_ORIGIN', 'http://127.0.0.1:8000').rstrip('/')
-    if production and not origin.startswith('https://'):
-        raise RuntimeError('Production requires an HTTPS APP_ORIGIN')
-    if production and os.getenv('KNOWLEDGE_SOURCE') == 'local':
-        raise RuntimeError('Production requires Google Drive ingestion')
     cookie = '__Host-ace_session' if production else 'ace_session'
     from urllib.parse import urlsplit
     app.add_middleware(HealthTrustedHostMiddleware, allowed_hosts=[urlsplit(origin).hostname] if production else ['127.0.0.1', 'localhost', 'testserver'])
@@ -485,11 +491,11 @@ def create_app(url=None):
         return FileResponse(FRONTEND / filename)
     return app
 
-def _startup_app():
+def _checked_startup(initialize):
     # Bootstrap is an operator release task, never an HTTP startup task.
     os.environ.pop("BOOTSTRAP_ADMINS", None)
     try:
-        return create_app()
+        return initialize()
     except Exception as exc:
         # Only fixed setting names and the exception class are safe to expose.
         # Exception text can contain database URLs, credentials, or source data.
@@ -505,6 +511,13 @@ def _startup_app():
             f'Startup failed ({type(exc).__name__}).{detail} '
             'Check production configuration and release prerequisites; private details suppressed.'
         ) from None
+
+
+def _startup_app():
+    # Build discovery imports this module without production credentials.
+    # Lifespan performs the same strict checks before runtime serves requests.
+    os.environ.pop("BOOTSTRAP_ADMINS", None)
+    return _checked_startup(lambda: create_app(defer_initialization=True))
 
 
 app = _startup_app()

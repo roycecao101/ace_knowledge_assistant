@@ -4,10 +4,68 @@ Prepared November 8, 2026. Nothing has been deployed. Existing Render commands,
 Dockerfile, backend requirements, local Uvicorn entrypoint, and database schema
 remain unchanged. See [Render fallback](render-deployment.md) for that deployment.
 
-Local verification: 455 existing backend tests, nine new Vercel regression tests,
-and 32 frontend tests passed. Backend tests ran in the existing Python 3.14
-development environment; this does not certify Python 3.12/Linux wheel packaging
-or a Vercel build. Only existing dependency deprecation warnings were observed.
+Validation on November 8, 2026:
+
+- All 466 backend tests passed under both existing Python 3.14 and a fresh
+  Python 3.12.5 virtual environment, including 11 Vercel deployment cases and
+  existing Render, OAuth, authentication, database and local development tests.
+- All 32 frontend tests passed. `git diff --check` passed.
+- Root `requirements.txt` installed successfully in the fresh Python 3.12
+  environment; `pip check` found no broken requirements. This verifies macOS
+  ARM wheels, not Vercel Linux packaging or final bundle size.
+- Fresh-process checks import both entrypoints without database initialization,
+  reject missing/invalid configuration and Preview at runtime, and suppress
+  private configuration values in startup errors. The hosted route test uses
+  deferred lifespan initialization and verifies roles, CSRF and durable sync.
+- Vercel CLI 65.12.1 was available through `npx`. `vercel build --prod` stopped
+  with `project_settings_required` because no local Vercel project settings
+  are linked. No account linking, settings/secrets pull, deployment, push,
+  migration, live database connection or Google OAuth operation was performed.
+- Dependency deprecation warnings remain. Actual Vercel build output, Linux
+  wheels, bundle size, database TLS connectivity and live OAuth remain unverified.
+
+After selecting the correct project in your authenticated operator environment,
+retrieve its settings with `vercel pull --environment production`, then run
+`vercel build --prod`. Pull downloads sensitive environment files: keep them
+private and outside commits. Neither command publishes a deployment. Inspect
+the local build output before authorizing a separate production deployment.
+
+## Confirmed import failure and initialization phases
+
+The previous module-level `_startup_app()` immediately called `create_app()`.
+A fresh process with `VERCEL=1` and no application settings failed import with
+`RuntimeError`; an invalid encryption key failed with `DriveAuthError`. These
+are reproducible application-import failures, even when Vercel has found the
+correct file. No historical Vercel logs or project settings were available to
+prove which exception caused the reported deployment failures.
+
+The module now exports the real FastAPI application without validating secrets
+or creating a database engine. Its lifespan initializes the database and runs
+all existing environment, OAuth, TLS, schema, administrator and folder checks
+before serving requests. Configuration failures retain sanitized diagnostics.
+There is no build-mode bypass, special environment flag, migration on import,
+or fallback application. Direct `create_app()` callers retain immediate
+initialization; the module entrypoints used by Uvicorn and Vercel defer it.
+
+- **Install/build:** resolve Python dependencies and discover/package the app.
+  Importing either `backend.main` or root `main` needs no production secrets
+  and makes no database connection. CDN discovery remains disabled.
+- **Function initialization/runtime:** lifespan requires the complete Production
+  configuration and an already prepared reachable database. A successful build
+  alone does not establish runtime readiness.
+- **Preview:** imports can succeed without secrets, but runtime startup still
+  rejects hosted development and `VERCEL_ENV=preview`. Do not give Preview
+  production credentials. Disable previews if successful previews are required;
+  isolated preview support is outside this configuration.
+- **Local/Render:** the same lifespan runs under Uvicorn; Render release and
+  local initialization commands remain unchanged.
+
+Vercel's [current official guide](https://vercel.com/kb/guide/ship-a-fastapi-app-on-vercel)
+supports `tool.vercel.entrypoint`; there is no confirmed need to change it.
+Root `main.py` re-exports the same app, rather than selecting another server.
+Wrong dashboard Root Directory, stale deployment commits, missing uploaded
+manifests, or dependency import errors remain possible causes of the historical
+errors, but are not verified project-setting defects.
 
 ## Compatibility findings and remaining blockers
 
@@ -112,11 +170,11 @@ Keep this pointed at the backend module, which preserves startup checks and safe
 diagnostics. Commit and push the configuration, then deploy the updated commit.
 
 If logs report `could not import "backend/main.py"`, read the final exception line.
-The entrypoint now reports the exception class and any missing required Vercel
+Runtime lifespan startup reports the exception class and any missing required Vercel
 setting names, never setting values or the underlying exception text. An empty
 missing-settings list does not validate the values: invalid OAuth configuration,
 database URLs/TLS settings, hosted development mode, and Preview deployments
-still fail closed. Local `.env` files are not loaded by this entrypoint.
+still fail closed at runtime. Local `.env` files are not loaded by this entrypoint.
 Do not fix these failures by bypassing production validation. A successful import
 also does not prove database connectivity or the lifespan release prerequisites.
 
@@ -210,7 +268,7 @@ migrations need a separate rollback plan.
 7. Inspect **Settings → Git** automatic-deployment settings. Keep production
    publication manually controlled while trying Vercel. Disable unnecessary
    preview deployments, or let them fail closed with no production secrets;
-   this adapter rejects `VERCEL_ENV=preview`. Don't add production credentials
+   runtime startup rejects `VERCEL_ENV=preview`. Don't add production credentials
    to Preview to fix those failures.
 
 ## Google Drive Web OAuth
