@@ -4,6 +4,8 @@ FastAPI serves the existing employee and administrator pages and same-origin aut
 
 ## Local setup
 
+For the existing Google Drive installation, use the [current restart instructions](docs/dashboard-sync-fix.md#starting-from-vs-code). They load the private local environment before launching FastAPI. Keep the existing database and accounts; the fresh-install fixture instructions below are not required for a restart.
+
 From this project root, activate your existing virtual environment, then run:
 
 ```sh
@@ -33,14 +35,13 @@ Set `APP_ENV=production` and `APP_ORIGIN=https://your-actual-host` behind HTTPS.
 
 SQLAlchemy models and a `DATABASE_URL` setting provide a path to PostgreSQL. Install a PostgreSQL driver, provision the schema with a reviewed migration, and securely provision at least two real administrators before deployment. The local seed command intentionally refuses production and non-SQLite databases. Schema changes currently require explicit migrations; application startup does not mutate the schema or credentials.
 
-Document ingestion and verified keyword search now use the existing authenticated endpoints. The administrator's Document Management, Google Drive Synchronization, and Settings sections connect to live backend services. Office editing and Policy Pulse remain unconnected. See the [ingestion setup and technical guide](docs/ingestion.md) for Google Workspace permissions, credentials, synthetic local synchronization, verification, and current limitations. See [Miriam's document guide](docs/admin-ingestion-guide.md) for routine operations.
-
-For an existing database, run `python -m backend.initialize_knowledge` after installing the updated requirements. This additive setup preserves account data. No real Ace documents were ingested during development, and the live Google connection remains subject to deployment authorization.
+Search uses the active approved document generation and verifies returned quotations locally. Google Drive synchronization, indexed/unreadable document reporting, folder settings, and account management are connected. Office management and Policy Pulse retain their existing unconnected status. Questions and answers are not stored, and no employee usage analytics are created. Document extraction and search run locally without an external AI service. See the [ingestion guide](docs/ingestion.md) and [OAuth setup](docs/google-drive-oauth.md).
 
 ## Verification
 
 ```sh
 python -m pytest -q
+node --test tests/test_auth_client.cjs tests/test_employee_search_ui.cjs
 ```
 
 Tests use fresh temporary databases, fictional identities, and synthetic questions. They cover the official logins/home offices, failed attempts and lock duration, deactivation across clients, PIN/session invalidation, administrator access, role denial, administrator minimums, logout, unauthenticated searches, CSRF/origin checks, password constraints, expiration, one-time PIN creation, and idempotent seeding.

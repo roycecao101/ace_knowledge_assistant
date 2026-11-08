@@ -1,8 +1,11 @@
 import os
 import asyncio
+import logging
+import sys
 from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks
 from .sync_service import SyncService, SyncBusy
+from .drive_auth import DriveAuthError, auth_mode
 from . import search as knowledge_search
 import re
 import secrets
@@ -11,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, inspect
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .database import database
@@ -21,6 +24,7 @@ from .auth import hasher, DUMMY, verify, digest, resolve, serialize, lock_admin_
 FRONTEND = Path(__file__).resolve().parent.parent / 'frontend'
 OFFICES = ['Alpharetta', 'Norcross', 'Lilburn']
 CATEGORIES = ['All Categories', 'HR & Employee Policies', 'OSHA & Safety', 'Front Office', 'Back Office / Clinical Operations', 'Insurance & Documentation (non-PHI)', 'Management & Operations', 'Training & Onboarding', 'Scripts & Communication']
+logger = logging.getLogger('uvicorn.error')
 
 class Login(BaseModel):
     identifier: str = Field(min_length=1, max_length=80)
@@ -48,14 +52,26 @@ class Search(BaseModel):
     category: str
 
 def create_app(url=None):
+    auth_mode()  # Reject desktop OAuth in hosted/production configuration at startup.
     @asynccontextmanager
     async def lifespan(app):
+        logger.info('Knowledge APIs registered: GET /api/admin/knowledge, GET /api/admin/documents, POST /api/admin/sync, PATCH /api/admin/settings')
+        logger.info('Knowledge runtime: source=%s, auth=%s, environment=%s, project_venv=%s',
+                    os.getenv('KNOWLEDGE_SOURCE', 'drive'), auth_mode(),
+                    os.getenv('APP_ENV', 'development'), sys.prefix != sys.base_prefix)
+        if (os.getenv('KNOWLEDGE_SOURCE', 'drive') == 'drive' and auth_mode() == 'adc'
+                and 'DRIVE_AUTH_MODE' not in os.environ):
+            logger.warning('DRIVE_AUTH_MODE is unset; this process uses ADC. Local OAuth requires restarting with DRIVE_AUTH_MODE=oauth_local and the approved account/folder environment.')
+        required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms'}
+        if not required.issubset(inspect(app.state.engine).get_table_names()):
+            logger.error('Knowledge schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
         async def schedule():
             while True:
                 try:
                     await asyncio.to_thread(app.state.sync.run_if_due)
-                except Exception:
-                    pass  # Never log credential errors or private source text.
+                except Exception as exc:
+                    # Exception messages/tracebacks can contain private source data.
+                    logger.warning('Knowledge scheduler check failed (%s). Check schema initialization and database availability.', type(exc).__name__)
                 await asyncio.sleep(300)
         worker = asyncio.create_task(schedule())
         yield
@@ -82,7 +98,11 @@ def create_app(url=None):
     async def security(request, call_next):
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             supplied = request.headers.get('origin')
-            if supplied and supplied != origin:
+            # Both loopback names work in development, but only on the origin
+            # serving this request. Do not permit a separate static-server port.
+            local_origin = (not production and request.url.hostname in ('localhost', '127.0.0.1')
+                            and supplied == str(request.base_url).rstrip('/'))
+            if supplied and supplied != origin and not local_origin:
                 return JSONResponse({'detail': 'Invalid request origin.'}, 403)
             if request.headers.get('sec-fetch-site') == 'cross-site':
                 return JSONResponse({'detail': 'Cross-site request rejected.'}, 403)
@@ -98,8 +118,9 @@ def create_app(url=None):
 
     def authenticated(request: Request, db=Depends(db_session)):
         session, account = resolve(db, request.cookies.get(cookie))
-        if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(request.headers.get('x-csrf-token', ''), session.csrf):
-            raise HTTPException(403, 'Invalid CSRF token.')
+        if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(
+                request.headers.get('x-csrf-token', '').encode('utf-8'), session.csrf.encode('utf-8')):
+            raise HTTPException(403, 'Invalid CSRF token.', headers={'X-CSRF-Error': 'invalid'})
         return session, account
 
     def admin(identity=Depends(authenticated)):
@@ -163,15 +184,25 @@ def create_app(url=None):
         return response
 
     @app.post('/api/search')
-    async def search(body: Search, identity=Depends(authenticated)):
+    async def search(body: Search, request: Request, identity=Depends(authenticated)):
         if body.office not in OFFICES or body.category not in CATEGORIES:
             raise HTTPException(422, 'Invalid search filters.')
         # No contents or employee-query associations are persisted or logged.
+        # Explicit development/admin diagnostics return only fixed stage counts.
+        # No logging, storage, employee identity, questions, or source text.
+        trace = {} if (not production and identity[0].role == 'admin'
+                       and request.headers.get('x-ace-search-diagnostics') == 'counts') else None
         try:
-            return await asyncio.wait_for(asyncio.to_thread(knowledge_search.search, factory,
-                body.question, body.office, body.category), timeout=40)
+            result = await asyncio.wait_for(asyncio.to_thread(knowledge_search.search, factory,
+                body.question, body.office, body.category, diagnostics=trace), timeout=40)
         except Exception:
-            return knowledge_search.unavailable()
+            # The worker may still be unwinding; do not read a partial trace.
+            result = knowledge_search.unavailable()
+            trace = None
+        headers = {'X-Ace-Search-Revision': knowledge_search.REVISION}
+        if trace is not None:
+            headers['X-Ace-Search-Trace'] = ','.join(f'{key}={value}' for key, value in trace.items())
+        return JSONResponse(result, headers=headers)
 
     @app.get('/api/admin/employees', dependencies=[Depends(admin)])
     def employees(db=Depends(db_session)):
@@ -257,6 +288,8 @@ def create_app(url=None):
             app.state.sync.configure(body.folder_id)
         except SyncBusy:
             raise HTTPException(409, 'Wait for the current synchronization to finish.')
+        except DriveAuthError as exc:
+            raise HTTPException(422, str(exc)) from None
         return {'ok': True}
 
     @app.post('/api/admin/sync', status_code=202, dependencies=[Depends(admin)])
@@ -266,15 +299,19 @@ def create_app(url=None):
             raise HTTPException(409, 'Configure the Google Drive folder ID first.')
         if status['running']:
             raise HTTPException(409, 'Synchronization is already running.')
+        try:
+            reservation = app.state.sync.reserve()
+        except SyncBusy:
+            raise HTTPException(409, 'Synchronization is already running.')
         def run():
             try:
-                app.state.sync.run()
+                app.state.sync.run(reservation)
             except SyncBusy:
                 pass
         background.add_task(run)
         return {'status': 'scheduled'}
 
-    @app.api_route('/api/admin/{service:path}', methods=['GET', 'POST', 'PATCH', 'DELETE'], dependencies=[Depends(admin)])
+    @app.api_route('/api/admin/{service:path}', methods=['GET', 'POST', 'PATCH', 'DELETE'], dependencies=[Depends(admin)], include_in_schema=False)
     def unconnected(service: str):
         raise HTTPException(503, 'This service is not connected.')
 

@@ -7,17 +7,8 @@ const searchApi = {
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(), 45_000);
     try {
-      const response = await fetch("/api/search", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": aceAuth.csrf },
-        body: JSON.stringify({ question, office, category }),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      if (response.status === 401) location.replace("/login.html");
-      if (!response.ok) throw new Error("Search unavailable");
-      const data = await response.json();
+      const data = await aceAuth.request("/api/search", "POST", { question, office, category },
+        { signal: controller.signal });
       validateResponse(data);
       return data;
     } finally {
@@ -83,10 +74,9 @@ function renderResult(data, synthetic = false) {
     data.results.forEach(result => card.append(renderQuote(result)));
   } else if (data.status === "not_found") {
     card.append(element("p", "result-message", "I could not find this in Ace's approved materials."));
-    card.append(element("p", "result-message", "Please check with your manager."));
   } else if (data.status === "conflict") {
     card.append(element("h2", "result-title", "⚠ Conflicting information"));
-    card.append(element("p", "result-message", "These approved documents disagree. Please check with your manager which one applies."));
+    card.append(element("p", "result-message", "These approved passages disagree. Please check with your manager which one applies."));
     data.results.forEach(result => card.append(renderQuote(result)));
   } else {
     card.append(element("h2", "result-title", "! Assistant unavailable"));

@@ -176,3 +176,81 @@ def test_production_configuration(tmp_path,monkeypatch):
     assert 'Strict-Transport-Security' in r.headers
     assert b'ACE_SYNTHETIC_PREVIEW = true' not in c.get('/auth-client.js').content
     app.state.engine.dispose()
+
+@pytest.mark.parametrize('host', ['127.0.0.1', 'localhost'])
+def test_development_same_origin_admin_session(app, host):
+    origin = f'http://{host}:8000'
+    c = TestClient(app, base_url=origin, headers={'Origin': origin})
+    r = login(c, 'admin', 'morgan', 'Ace-Admin-Test-2026')
+    assert r.status_code == 200
+    assert 'HttpOnly' in r.headers['set-cookie']
+    assert 'SameSite=strict' in r.headers['set-cookie']
+    assert 'Secure' not in r.headers['set-cookie']
+    assert c.get('/api/auth/me').json()['user']['id'] == 'morgan'
+    assert c.get('/admin.html').status_code == 200
+    assert c.get('/api/admin/admins').status_code == 200
+    assert c.post('/api/auth/logout').status_code == 200
+    assert c.get('/api/admin/admins').status_code == 401
+
+@pytest.mark.parametrize('origin', ['http://localhost:5500', 'http://127.0.0.1:5500', 'https://evil.example'])
+def test_development_rejects_other_origins(app, origin):
+    c = TestClient(app, base_url='http://localhost:8000', headers={'Origin': origin})
+    assert login(c, 'admin', 'morgan', 'Ace-Admin-Test-2026').status_code == 403
+
+@pytest.mark.parametrize('identifier', ['morgan', 'avery'])
+def test_invalid_admin_credentials(app, identifier):
+    c = TestClient(app)
+    r = login(c, 'admin', identifier, 'invalid-password')
+    assert r.status_code == 401
+    assert 'set-cookie' not in r.headers
+    assert c.get('/api/auth/me').status_code == 401
+    assert c.get('/api/admin/admins').status_code == 401
+
+
+def test_admin_csrf_tracks_session_rotation_and_refresh(app):
+    c = admin(app)
+    old_cookie = c.cookies.get('ace_session')
+    old_csrf = c.headers['X-CSRF-Token']
+    assert login(c, 'admin', 'morgan', 'Ace-Admin-Test-2026').status_code == 200
+    assert c.cookies.get('ace_session') != old_cookie
+    assert c.headers['X-CSRF-Token'] != old_csrf
+    c.headers['X-CSRF-Token'] = old_csrf  # An already open tab's page memory.
+    response = c.patch('/api/admin/settings', json={'folder_id': 'approved-root'})
+    assert response.status_code == 403
+    assert response.headers['X-CSRF-Error'] == 'invalid'
+    with app.state.factory() as db:
+        from backend.knowledge_models import KnowledgeState
+        assert db.get(KnowledgeState, 1) is None
+    me = c.get('/api/auth/me')
+    assert me.status_code == 200 and me.headers['Cache-Control'] == 'no-store'
+    c.headers['X-CSRF-Token'] = me.json()['csrf_token']
+    assert c.patch('/api/admin/settings', json={'folder_id': 'approved-root'}).status_code == 200
+    assert c.post('/api/auth/logout').status_code == 200
+    c.cookies.set('ace_session', old_cookie)
+    assert c.get('/api/auth/me').status_code == 401
+
+
+def test_admin_session_and_csrf_survive_backend_recreation(app):
+    c = admin(app)
+    csrf = c.headers['X-CSRF-Token']
+    restarted = create_app(str(app.state.engine.url))
+    try:
+        other = TestClient(restarted)
+        other.cookies.update(c.cookies)
+        refreshed = other.get('/api/auth/me')
+        assert refreshed.status_code == 200 and refreshed.json()['csrf_token'] == csrf
+        assert other.patch('/api/admin/settings', json={'folder_id': 'approved-root'}).status_code == 403
+        other.headers['X-CSRF-Token'] = csrf
+        assert other.patch('/api/admin/settings', json={'folder_id': 'approved-root'}).status_code == 200
+    finally:
+        restarted.state.engine.dispose()
+
+
+@pytest.mark.parametrize('token', [b'', b'wrong-token', b'\xff'])
+def test_invalid_csrf_is_rejected_even_for_malformed_header(app, token):
+    c = admin(app)
+    c.headers.pop('X-CSRF-Token')
+    response = c.patch('/api/admin/settings', json={'folder_id': 'approved-root'},
+                       headers=[(b'X-CSRF-Token', token)])
+    assert response.status_code == 403
+    assert response.headers['X-CSRF-Error'] == 'invalid'

@@ -1,15 +1,13 @@
 "use strict";
 
-/* Integration contract (not implemented):
- * GET /api/admin/session: verify a separate admin session before loading data.
- * GET /api/admin/{overview,employees,documents,sync,offices,admins,settings,pulse}
- * POST employee creation/status/PIN-reset, sync, office creation, admin changes;
- * PATCH settings. All mutations require server authorization and CSRF protection.
- * The backend must enforce >=2 active admins atomically, generate PINs securely,
- * hash them server-side, and return plaintext once with Cache-Control: no-store.
- * Never return PIN hashes, employee questions, or individual usage histories.
- * Use secure HttpOnly SameSite session cookies; never persist credentials here.
- * No API requests or real administrative actions are implemented in this build.
+/* Shared dashboard components and isolated synthetic preview.
+ * Live requests are implemented in live-admin.js through auth-client.js:
+ * GET /api/auth/me restores the existing session and CSRF token.
+ * GET /api/admin/knowledge supplies Documents, Synchronization, and Settings.
+ * POST /api/admin/sync starts synchronization; PATCH /api/admin/settings saves
+ * the folder ID. GET /api/admin/sync is not the status endpoint.
+ * All requests use the same origin as the FastAPI-served administrator page.
+ * The preview adapter below intentionally performs no live API operations.
  */
 const adminApi = Object.freeze({
   async request() {

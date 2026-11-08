@@ -32,7 +32,36 @@ if (!previewMode) (async () => {
       await navigate();
     }))]);
   }
+  const date = value => value ? new Date(value * 1000).toLocaleString() : "Never";
+  const syncLabels = {not_configured: "Folder not configured", pending: "Awaiting first synchronization",
+    running: "Synchronization in progress", failed: "Last synchronization failed", succeeded: "Last synchronization completed"};
+  function knowledgePanel(state) {
+    const synthetic = state.source_type === "local";
+    const source = panel(synthetic ? "Synthetic development synchronization" : "Google Drive synchronization", "Automatic synchronization is checked every five minutes and runs at least daily while the server is online.");
+    if (synthetic) source.append(el("p", "", "This server uses fictional local documents. Google Drive access has not been tested here."));
+    source.append(el("p", "", state.configured ? "Knowledge folder configured." : "Configure a knowledge folder in Settings."));
+    source.append(el("p", "", state.connection_verified ? "This folder has completed a successful synchronization." : "Access to this folder has not yet been verified by a successful synchronization."));
+    source.append(el("p", "", syncLabels[state.sync_status]));
+    source.append(el("p", "", `Last successful synchronization: ${date(state.last_success)}`));
+    source.append(el("p", "", `Last attempt: ${date(state.last_attempt)}`));
+    if (state.error) source.append(el("p", "error", state.error));
+    const resync = button("Re-sync now", () => run(async () => {
+      resync.disabled = true;
+      try {
+        await aceAuth.request("/api/admin/sync", "POST");
+        renderStatus("Synchronization requested. Its outcome will appear below.");
+        await navigate();
+      } finally { resync.disabled = false; }
+    }), "primary");
+    resync.disabled = state.running || !state.configured;
+    source.append(resync, button("Refresh status", () => run(navigate)));
+    return source;
+  }
+  let refreshTimer;
+  let navigationVersion = 0;
   async function navigate() {
+    clearTimeout(refreshTimer);
+    const version = ++navigationVersion;
     const id = location.hash.slice(1) || "overview";
     const section = sections.find(s => s[0] === id) || sections[0];
     document.querySelector("#page-title").textContent = section[1];
@@ -41,14 +70,19 @@ if (!previewMode) (async () => {
     nav.querySelectorAll("a").forEach(a => {if(a.dataset.section === id) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");});
     content.replaceChildren();
     if (id === "overview") {
-      const [employees, admins] = await Promise.all([aceAuth.request("/api/admin/employees"), aceAuth.request("/api/admin/admins")]);
-      content.append(renderCards([["Active employees", employees.filter(e => e.active).length, "Account access"], ["Active administrators", admins.filter(a => a.active).length, "At least two must remain"]]));
-      content.append(panel("Knowledge services", "Document search and Google Drive synchronization are connected. Open Documents or Synchronization to review the current index. Policy Pulse is not connected.")); return;
+      const [employees, admins, state] = await Promise.all([aceAuth.request("/api/admin/employees"), aceAuth.request("/api/admin/admins"), aceAuth.request("/api/admin/knowledge")]);
+      if (version !== navigationVersion) return;
+      content.append(renderCards([["Active employees", employees.filter(e => e.active).length, "Account access"], ["Active administrators", admins.filter(a => a.active).length, "At least two must remain"],
+        ["Indexed documents", state.indexed_count, "Readable approved documents"], ["Files I could not read", state.unreadable_count, "Review in Document Management"]]));
+      content.append(knowledgePanel(state));
+      refreshTimer = setTimeout(() => run(navigate), state.running ? 3000 : 30000);
+      return;
     }
     if (id === "employees" || id === "admins") {
       const employee = id === "employees";
       const path = `/api/admin/${id}`;
       const rows = await aceAuth.request(path);
+      if (version !== navigationVersion) return;
       const p = panel(employee ? "Employees" : "Administrators", "Manage authenticated account access.", button(employee ? "Create employee" : "Add administrator", () => editForm("Create account", [
         {name:"id", label:"Account identifier"}, {name:"name",label:"Display name"},
         employee ? {name:"office",label:"Home office", options:["Alpharetta","Norcross","Lilburn"]} : {name:"password",label:"Password (at least 12 characters)",type:"password"}
@@ -65,15 +99,8 @@ if (!previewMode) (async () => {
     }
     if (["documents", "sync", "settings"].includes(id)) {
       const state = await aceAuth.request("/api/admin/knowledge");
-      const p = panel("Google Drive knowledge source", "Only the configured knowledge folder and its approved category folders are imported.");
-      p.append(el("p", "", `Last successful synchronization: ${state.last_success ? new Date(state.last_success * 1000).toLocaleString() : "Never"}`));
-      p.append(el("p", "", state.running ? "Synchronization is running. Refresh status to check progress." : "Synchronization is idle."));
-      if (state.error) p.append(el("p", "error", state.error));
-      p.append(button("Re-sync now", () => run(async () => {
-        await aceAuth.request("/api/admin/sync", "POST");
-        renderStatus("Synchronization requested. Refresh status to see the result.", "success");
-      }), "primary"));
-      p.append(button("Refresh status", () => run(navigate)));
+      if (version !== navigationVersion) return;
+      const p = knowledgePanel(state);
       p.append(renderForm([{name:"folder_id", label:"Google Drive folder ID", value:state.folder_id}], "Save folder ID", data => run(async () => {
         await aceAuth.request("/api/admin/settings", "PATCH", Object.fromEntries(data));
         await navigate();
@@ -82,11 +109,13 @@ if (!previewMode) (async () => {
       const rows = state.documents;
       const office = d => d.offices.length ? d.offices.join(" and ") : "Company-wide";
       const docs = panel("Documents", "Manage source files in Google Drive, then synchronize.");
-      docs.append(renderTable("Indexed documents", ["Filename", "Category", "Office", "Status"], rows.map(d => [d.filename,d.category,office(d),d.status])));
+      docs.append(renderTable("Indexed documents", ["Filename", "Category", "Office", "Modified"], rows.filter(d => d.status === "indexed").map(d => [d.filename,d.category,office(d),d.modified])));
       content.append(docs);
       const unreadable = panel("Files I could not read", "These files are excluded from employee search. Replace image-only scans with text PDFs, Google Docs, or Word documents.");
       unreadable.append(renderTable("Unreadable files", ["Filename", "Extraction error"], rows.filter(d => d.error).map(d => [d.filename,d.error])));
-      content.append(unreadable); return;
+      content.append(unreadable);
+      if (state.running) refreshTimer = setTimeout(() => run(navigate), 3000);
+      return;
     }
     content.append(panel(section[1], "This service is not connected. No changes can be made until its backend integration is configured."));
   }

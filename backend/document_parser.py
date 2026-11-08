@@ -71,7 +71,7 @@ def parse_docx(data, filename):
                 raise Unreadable('Word archive exceeds extraction limit')
         doc = Document(BytesIO(data))
         baseline = filename_offices(filename)
-        scopes, sections, source = [], [], []
+        scopes, sections, source, headings = [], [], [], []
         heading = 'Document body'
         blocked = []
         from .document_indexer import assistant_heading
@@ -82,6 +82,9 @@ def parse_docx(data, filename):
                 outline = block._p.xpath('./w:pPr/w:outlineLvl')
                 level = int(match[1]) if match else (int(outline[0].get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val'))+1 if outline else None)
                 if level:
+                    while headings and headings[-1][0] >= level:
+                        headings.pop()
+                    headings.append((level, text or 'Document body'))
                     while scopes and scopes[-1][0] >= level:
                         scopes.pop()
                     while blocked and blocked[-1][0] >= level:
@@ -90,19 +93,51 @@ def parse_docx(data, filename):
                     scoped = heading_offices(text)
                     # Explicit headings reset the same-level scope; child headings inherit.
                     offices = scoped or (scopes[-1][1] if scopes else baseline)
+                    if baseline and scoped:
+                        offices = [office for office in scoped if office in baseline]
+                    # A heading outside a filename's scope must never become
+                    # company-wide simply because the intersection is empty.
+                    excluded = bool(baseline and scoped and not offices)
+                    if excluded:
+                        blocked[-1] = (level, True)
                     scopes.append((level, offices))
-                    heading = text or 'Document body'
+                    heading = ' / '.join(value for _, value in headings)
                 offices = scopes[-1][1] if scopes else baseline
                 source.append(text)
                 if text.strip():
                     sections.append(Section(text, heading, None, offices, not level and not (blocked and blocked[-1][1])))
             elif isinstance(block, Table):
-                for row in block.rows:
-                    for cell in row.cells:
+                # Keep row/column labels with their values. Without this,
+                # a terse table value loses the policy and condition it names.
+                def label(text):
+                    return (bool(text.strip()) and len(text.split()) <= 12
+                        and not re.search(r'[.!?]$|[$€£]|\b\d+\s*(?:days?|weeks?|months?|years?|hours?)\b', text.strip(), re.I))
+                first = block.rows[0] if block.rows else None
+                header = bool(first and (first._tr.xpath('./w:trPr/w:tblHeader')
+                    or all(label(cell.text) for cell in first.cells)))
+                headers = [cell.text.strip() for cell in first.cells] if header else []
+                table_blocked = any(assistant_heading(value) for value in headers)
+                for row_number, row in enumerate(block.rows):
+                    row_label = row.cells[0].text.strip() if len(row.cells) > 1 and label(row.cells[0].text) else ''
+                    for column, cell in enumerate(row.cells):
                         text = cell.text
                         source.append(text)
                         if text.strip():
-                            sections.append(Section(text, heading, None, scopes[-1][1] if scopes else baseline, not (blocked and blocked[-1][1]), True))
+                            context = [heading]
+                            if headers and row_number:
+                                context.append(headers[column] if column < len(headers) else '')
+                            if not header or row_number:
+                                context.append(row_label)
+                            cell_heading = ' / '.join(dict.fromkeys(value for value in context if value))
+                            offices = scopes[-1][1] if scopes else baseline
+                            allowed = not table_blocked and not (blocked and blocked[-1][1])
+                            for value in context[1:]:
+                                allowed = allowed and not assistant_heading(value)
+                                named = heading_offices(value)
+                                if named:
+                                    offices = [o for o in named if not offices or o in offices]
+                                    allowed = allowed and bool(offices)
+                            sections.append(Section(text, cell_heading, None, offices, allowed, True))
         if not sections:
             raise Unreadable('Word document contains no extractable text')
         return Parsed('\n'.join(source), sections)
@@ -116,4 +151,4 @@ def parse(data, mime, filename):
         return parse_pdf(data, filename)
     if mime in (DOCX, GDOC):
         return parse_docx(data, filename)
-    raise Unreadable('Unsupported format')
+    raise Unreadable('Unsupported format; use a text PDF, .docx, or Google Doc')

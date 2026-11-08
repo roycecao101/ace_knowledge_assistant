@@ -10,7 +10,7 @@ def normalize(text):
 
 def spans(text):
     # Sentence spans are sliced directly from the extracted source, never rebuilt.
-    for match in re.finditer(r'[^.!?]+(?:[.!?]+|$)', text):
+    for match in re.finditer(r'.+?(?:[.!?]+(?=\s|$)|$)', text, re.S):
         sentence = match.group().strip()
         if not sentence:
             continue
@@ -23,11 +23,18 @@ def spans(text):
 
 def verify_quote(quote, source):
     q, s = words(quote), words(source)
-    if not q or len(quote.split()) > 80:
+    if not q or len(q) > 80 or len(quote.split()) > 80:
         return False
     # Require the complete source span as well as every six-word window.
     if quote not in source:
         return False
+    if len(quote.split()) < 6:
+        # A short quote must occupy a complete source line (e.g. a table cell)
+        # or a whole sentence, rather than an arbitrary fragment of a policy.
+        whole = any(line.strip() == quote.strip() for line in source.splitlines())
+        whole = whole or any(span == quote for span in spans(source) if re.search(r'[.!?]$', span))
+        if not whole:
+            return False
     normalized_source = ' ' + ' '.join(s) + ' '
     return all(' ' + ' '.join(q[i:i+6]) + ' ' in normalized_source for i in range(max(1, len(q)-5)))
 
@@ -37,7 +44,7 @@ def index_document(db, document, parsed):
             continue
         for clause in safe_text(section.text):
             for quote in spans(clause):
-                if len(quote.split()) < 6 and not ((section.table_cell and quote.strip() == section.text.strip()) or re.search(r'[.!?]$', quote)):
+                if len(quote.split()) < 6 and not (quote.strip() == section.text.strip() or re.search(r'[.!?]$', quote)):
                     continue
                 if verify_quote(quote, parsed.source):
                     passage = Passage(generation=document.generation, document_id=document.id, text=quote,
@@ -70,7 +77,10 @@ def safe_text(text):
     for clause in clauses:
         if assistant_heading(clause) or re.search(r"(?i)ignore (?:your |all |previous )?(?:rules|instructions)|fabricate|invent (?:answers|quotes|responses)", clause):
             continue
-        if re.search(r"_{2,}|\[[^\]]+\]|\{[^}]+\}|\b(?:TBD|TODO)\b", clause, re.I):
+        if re.search(r"_{2,}|\[[^\]]+\]|\{[^}]+\}|\b(?:TBD|TODO|TBC|placeholder)\b|<[^>]+>|\b(?:X{2,}|N/?A)\b", clause, re.I):
+            continue
+        # Questions and explicit gaps in a template are not approved answers.
+        if '?' in clause or re.search(r"(?i)\b(?:not (?:yet )?(?:specified|defined|determined|provided|established)|to be (?:determined|confirmed|completed)|fill (?:in|out)|insert (?:amount|value|date|text))\b", clause):
             continue
         kept.append(clause)
     # Newlines prevent joining across removed instructions into a fabricated sentence.
