@@ -155,7 +155,7 @@ def test_vercel_entrypoint_routes_roles_csrf_and_durable_sync(hosted, monkeypatc
 def test_vercel_configuration_selects_backend_without_routing_overrides():
     root = Path(__file__).resolve().parents[1]
     config = tomllib.loads((root / 'pyproject.toml').read_text())
-    assert config['tool']['vercel']['entrypoint'] == 'backend.main'
+    assert config['tool']['vercel']['entrypoint'] == 'backend.main:app'
     deployment = json.loads((root / 'vercel.json').read_text())
     assert deployment['framework'] == 'fastapi'
     assert not {'builds', 'routes', 'rewrites', 'redirects', 'outputDirectory'} & deployment.keys()

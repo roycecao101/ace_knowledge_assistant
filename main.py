@@ -1,2 +1,2 @@
-"""Compatibility ASGI import; Vercel selects backend.main in pyproject.toml."""
+"""Compatibility ASGI import; Vercel selects backend.main:app in pyproject.toml."""
 from backend.main import app

@@ -13,7 +13,7 @@ or a Vercel build. Only existing dependency deprecation warnings were observed.
 
 | Area | Finding and resolution |
 | --- | --- |
-| Entrypoint | `backend.serve` starts Uvicorn, which Vercel must not run. `pyproject.toml` explicitly selects `backend.main`, which defines the top-level FastAPI `app`. Root `main.py` remains a compatibility import only. Vercel supports lifespan events. |
+| Entrypoint | `backend.serve` starts Uvicorn, which Vercel must not run. `pyproject.toml` explicitly selects `backend.main:app`, which defines the top-level FastAPI `app`. Root `main.py` remains a compatibility import only. Vercel supports lifespan events. |
 | Frontend | HTML and assets are served by existing FastAPI routes. The bundle explicitly includes `frontend/**`. No static hosting rewrite, `public/` copy, CDN promotion override, or CORS change is used. `/index.html` and `/admin.html` retain session/role checks; both login pages remain available. |
 | Database | Internal Render hosts cannot be reached from Vercel. Use the complete external Render hostname with certificate-verified TLS. Missing DB configuration and SQLite fail closed. Pool size is one plus one overflow per instance on Vercel; scaling still needs a connection budget. |
 | Filesystem | Documents download into memory; parsing uses byte streams. Accounts, sessions, OAuth state, encrypted refresh tokens, document index, Find & Fix Log, and sync counters remain in PostgreSQL. No persistent function filesystem writes are introduced. Python/dependency caches are ephemeral and must never be relied on. |
@@ -91,7 +91,7 @@ document bytes are not uploaded through these API routes.
 ## Production environment variables
 
 If logs report `FASTAPI_ENTRYPOINT_NOT_FOUND`, ensure the repository-root
-`pyproject.toml` is included with `[tool.vercel]` and `entrypoint = "backend.main"`.
+`pyproject.toml` is included with `[tool.vercel]` and `entrypoint = "backend.main:app"`.
 Keep this pointed at the backend module, which preserves startup checks and safe
 diagnostics. Commit and push the configuration, then deploy the updated commit.
 
