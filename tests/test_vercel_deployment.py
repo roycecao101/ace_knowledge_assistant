@@ -1,5 +1,9 @@
 """Vercel adapter regression checks. No cloud resources or credentials used."""
 import importlib
+import os
+from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +17,41 @@ from backend.runtime import validate_environment, development_only
 from backend.main import create_app
 from backend.sync_service import SyncService
 from backend.hosting_models import SyncRequest
+
+
+def test_fresh_vercel_import_and_safe_missing_settings():
+    # A fresh interpreter exercises imports rather than reusing backend.main.
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(('APP_', 'DRIVE_', 'VERCEL', 'CLOUD_', 'DB_'))
+           and key not in {'DATABASE_URL', 'KNOWLEDGE_SOURCE', 'SYNC_EXECUTOR',
+                           'RENDER', 'K_SERVICE', 'GOOGLE_APPLICATION_CREDENTIALS',
+                           'SYNTHETIC_DOCUMENT_DIR'}}
+    env.update(VERCEL='1', VERCEL_ENV='production')
+    root = Path(__file__).resolve().parents[1]
+    failed = subprocess.run([sys.executable, '-c', 'import main'], cwd=root,
+                            env=env, capture_output=True, text=True)
+    assert failed.returncode != 0
+    assert 'Missing required settings: APP_ENV, APP_ORIGIN, DATABASE_URL' in failed.stderr
+    env.update(APP_ENV='production', APP_ORIGIN='https://example.test',
+               DATABASE_URL='postgresql://fictional:private-password@db.render.com/ace',
+               KNOWLEDGE_SOURCE='drive', DRIVE_AUTH_MODE='oauth_web',
+               SYNC_EXECUTOR='database', DRIVE_AUTHORIZED_EMAIL='team@example.test',
+               DRIVE_KNOWLEDGE_FOLDER_ID='approved-root',
+               DRIVE_WEB_CLIENT_ID='fictional.apps.googleusercontent.com',
+               DRIVE_WEB_CLIENT_SECRET='private-client-secret',
+               DRIVE_TOKEN_ENCRYPTION_KEY='invalid-private-key')
+    failed = subprocess.run([sys.executable, '-c', 'import main'], cwd=root,
+                            env=env, capture_output=True, text=True)
+    assert failed.returncode != 0
+    assert 'Startup failed (DriveAuthError)' in failed.stderr
+    for value in ('private-password', 'private-client-secret', 'invalid-private-key'):
+        assert value not in failed.stderr
+    from cryptography.fernet import Fernet
+    env['DRIVE_TOKEN_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
+    imported = subprocess.run(
+        [sys.executable, '-c', 'from main import app; from fastapi import FastAPI; assert isinstance(app, FastAPI)'],
+        cwd=root, env=env, capture_output=True, text=True)
+    assert imported.returncode == 0, imported.stderr
 
 
 def test_vercel_rejects_development_utilities_and_preview(hosted, monkeypatch):

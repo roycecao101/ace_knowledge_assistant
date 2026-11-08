@@ -90,6 +90,15 @@ document bytes are not uploaded through these API routes.
 
 ## Production environment variables
 
+If logs report `could not import "main.py"`, read the final exception line.
+The entrypoint now reports the exception class and any missing required Vercel
+setting names, never setting values or the underlying exception text. An empty
+missing-settings list does not validate the values: invalid OAuth configuration,
+database URLs/TLS settings, hosted development mode, and Preview deployments
+still fail closed. Local `.env` files are not loaded by this entrypoint.
+Do not fix these failures by bypassing production validation. A successful import
+also does not prove database connectivity or the lifespan release prerequisites.
+
 In Vercel **Project → Settings → Environment Variables**, scope all of the
 following to **Production only**. Mark secret values sensitive. Leave Preview
 and Development without production secrets. Set them before the first deployment.
