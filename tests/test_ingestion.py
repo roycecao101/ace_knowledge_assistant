@@ -193,6 +193,8 @@ def test_google_doc_export_and_index(env):
         assert app.state.sync.run()
     files.export_media.assert_called_once_with(fileId='gdoc',mimeType=DOCX)
     assert ask(app)['results'][0]['filename']=='Exact Google Name'
+    from backend.discrepancies import review_log
+    assert review_log(app.state.factory)['scan_status'] == 'succeeded'
     assert "'synthetic' in parents" in files.list.call_args.kwargs['q']
 
 def test_local_isolation(tmp_path,monkeypatch):

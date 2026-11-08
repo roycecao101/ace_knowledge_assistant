@@ -3,3 +3,7 @@
 /* Keep the view switch visible when the mobile sidebar footer is hidden. */
 .panel>.actions{margin-top:20px}.form .notice{margin-bottom:0}nav a{overflow-wrap:normal}
 .view-link{color:var(--teal);font-size:12px;font-weight:600;text-decoration:none;padding:8px 0;white-space:nowrap}.view-link:hover{text-decoration:underline}.header{gap:16px;flex-wrap:wrap;height:auto;min-height:91px}@media(max-width:720px){.header{min-height:75px}.header>.view-link{order:1;flex-basis:100%}}
+
+.discrepancy-source{margin:20px 0;border-top:1px solid var(--border);padding-top:12px;overflow-wrap:anywhere}.discrepancy-source blockquote{margin:12px 0;padding:14px;border-left:3px solid var(--teal);background:#f0f6f7;white-space:pre-wrap;line-height:1.6}
+.discrepancy-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.discrepancy-comparison .discrepancy-source{min-width:0}.discrepancy-comparison dl{display:block}.discrepancy-comparison dd{margin:0 0 10px}dialog:has(.discrepancy-comparison){width:min(1000px,94vw)}@media(max-width:650px){.discrepancy-comparison{grid-template-columns:1fr}}
+.scan-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.scan-summary .card-value{font-size:20px;overflow-wrap:anywhere}@media(max-width:720px){.scan-summary{grid-template-columns:1fr}}

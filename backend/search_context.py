@@ -56,5 +56,43 @@ def context_passages(rows, wanted, vocabulary, supplies_answer, deadline_ok, con
                 break
             if sufficient(text, passage.heading) and verify_quote(text, document.source_text):
                 yield SimpleNamespace(id=passage.id, text=text, heading=passage.heading,
-                    offices=passage.offices, page=passage.page), document
+                    offices=passage.offices, page=passage.page,
+                    passage_ids=tuple(positioned[k][0].id for k in range(i, j + 1))), document
                 break
+
+
+def indexed_window(reference, passages, documents):
+    """Rebuild a scanner citation from current index references, never copies.
+
+    Require the same unique spans and uninterrupted boundaries as employee
+    context recovery. A changed, removed or excluded clause invalidates it.
+    """
+    ids = [reference] if isinstance(reference, int) else reference
+    if not isinstance(ids, (list, tuple)) or not ids or len(ids) > 80 or len(set(ids)) != len(ids):
+        return None, None
+    parts = [passages.get(pid) for pid in ids]
+    if any(p is None for p in parts):
+        return None, None
+    first = parts[0]
+    document = documents.get(first.document_id)
+    if not document or document.error:
+        return None, None
+    if len(parts) == 1:
+        return first, document
+    start, previous_end = None, None
+    for part in parts:
+        offset = document.source_text.find(part.text)
+        if (part.document_id != first.document_id or part.heading != first.heading
+                or part.offices != first.offices or part.page != first.page or offset < 0
+                or document.source_text.find(part.text, offset + 1) >= 0
+                or (previous_end is not None and (offset < previous_end
+                    or document.source_text[previous_end:offset].strip()))):
+            return None, None
+        if start is None:
+            start = offset
+        previous_end = offset + len(part.text)
+    text = document.source_text[start:previous_end]
+    if not verify_quote(text, document.source_text):
+        return None, None
+    return SimpleNamespace(id=first.id, text=text, heading=first.heading,
+                           page=first.page, offices=first.offices), document

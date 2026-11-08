@@ -36,6 +36,46 @@ if (!previewMode) (async () => {
   const date = value => value ? new Date(value * 1000).toLocaleString() : "Never";
   const syncLabels = {not_configured: "Folder not configured", pending: "Awaiting first synchronization",
     running: "Synchronization in progress", failed: "Last synchronization failed", succeeded: "Last synchronization completed"};
+  const scanLabels = {not_scanned: "Awaiting analysis", failed: "Scan failed", incomplete: "Analysis incomplete"};
+  function discrepancyNotice(log) {
+    const notice = el("div", "notice warn");
+    notice.setAttribute("role", "status");
+    if (log.active_count) {
+      const link = el("a", "", `⚠ ${log.active_count} potential policy discrepancies require review.`);
+      link.href = "#find-fix"; notice.append(link);
+    } else if (log.scan_status !== "succeeded") {
+      const link = el("a", "", "Policy discrepancy analysis is incomplete. Open Find & Fix Log.");
+      link.href = "#find-fix"; notice.append(link);
+    } else notice.hidden = true;
+    return notice;
+  }
+  function sourceEvidence(title, source) {
+    const node = el("section", "discrepancy-source");
+    node.append(el("h3", "", title), el("blockquote", "", source.quote));
+    const info = el("dl");
+    [["Source filename", source.filename], ["Heading", source.heading || "Not supplied"],
+      ["Page", source.page || "Not supplied"], ["Applicable office", source.office]].forEach(([key, value]) => info.append(el("dt", "", key), el("dd", "", value)));
+    node.append(info); return node;
+  }
+  function issueDetails(detail) {
+    const evidence = detail.evidence || [{document_a: detail.document_a, document_b: detail.document_b}];
+    const comparison = el("div", "discrepancy-comparison");
+    const position = el("p", "muted");
+    let index = 0;
+    const previous = button("Previous comparison", () => { index--; display(); });
+    const next = button("Next comparison", () => { index++; display(); });
+    function display() {
+      comparison.replaceChildren(sourceEvidence("Document A", evidence[index].document_a), sourceEvidence("Document B", evidence[index].document_b));
+      position.textContent = `Verified comparison ${index + 1} of ${evidence.length}. ${detail.pair_count || 1} candidate passage pairs grouped into this issue.`;
+      previous.disabled = index === 0; next.disabled = index === evidence.length - 1;
+    }
+    const actions = el("div", "actions");
+    if (evidence.length > 1) actions.append(previous, next);
+    display();
+    return [badge("Needs Review", "warn"), el("h3", "", detail.topic || "Policy issue"),
+      el("p", "muted", "Human review is required. These verified quotations may disagree; this log does not determine which source is correct. Review their context and applicable offices with the appropriate manager."),
+      position, comparison, actions];
+  }
   function knowledgePanel(state) {
     const synthetic = state.source_type === "local";
     const source = panel(synthetic ? "Synthetic development connection" : "Google Drive Connection",
@@ -79,11 +119,12 @@ if (!previewMode) (async () => {
     const show = (...nodes) => { content.replaceChildren(...nodes); content.setAttribute("aria-busy", "false"); };
     try {
       if (id === "overview") {
-        const [employees, admins, state] = await Promise.all([aceAuth.request("/api/admin/employees"), aceAuth.request("/api/admin/admins"), aceAuth.request("/api/admin/knowledge")]);
+        const [employees, admins, state, log] = await Promise.all([aceAuth.request("/api/admin/employees"), aceAuth.request("/api/admin/admins"), aceAuth.request("/api/admin/knowledge"), aceAuth.request("/api/admin/discrepancies")]);
         if (version !== navigationVersion) return;
-        show(renderCards([["Active employees", employees.filter(e => e.active).length, "Account access"], ["Active administrators", admins.filter(a => a.active).length, "At least two must remain"],
+        show(discrepancyNotice(log), renderCards([["Active employees", employees.filter(e => e.active).length, "Account access"], ["Active administrators", admins.filter(a => a.active).length, "At least two must remain"],
           ["Indexed documents", state.indexed_count, "Readable approved documents"], ["Unreadable files", state.unreadable_count, "Review in Knowledge Management"]]),
           panel("Knowledge workspace", "Monitor Google Drive and review indexed or unreadable files in one place.", button("Open Knowledge Management", () => { location.hash = "knowledge"; }, "primary")));
+        refreshTimer = setTimeout(() => run(navigate), 10000);
         return;
       }
       if (id === "employees" || id === "admins") {
@@ -154,7 +195,29 @@ if (!previewMode) (async () => {
         p.append(renderTable("Available offices", ["Office name", "Office code", "Alternate code"], offices.map(o => [o.name,badge(o.code),o.aliases.join(", ") || "—"])));
         show(p); return;
       }
-      show(panel("Policy Guardian", "Policy change monitoring is planned. Continue reviewing approved documents and synchronization status in Knowledge Management."));
+      if (id === "find-fix") {
+        const [state, log] = await Promise.all([aceAuth.request("/api/admin/knowledge"), aceAuth.request("/api/admin/discrepancies")]);
+        if (version !== navigationVersion) return;
+        const review = panel("Active potential discrepancies", "These passages may disagree. Confirm the correct policy with the appropriate manager, update the authorized source in Google Drive, then click Re-sync now. Alerts clear when the updated index no longer supports the discrepancy.");
+        if (log.error) review.append(el("p", "notice error", log.error));
+        if (state.unreadable_count) review.append(el("p", "notice warn", "Unreadable files are excluded from this scan. Review them in Knowledge Management."));
+        if (!log.active_count) review.append(el("p", "muted", log.scan_status === "succeeded" ? "No supported potential discrepancies found. This local scan may miss differently worded conflicts." : "Analysis has not completed for the current index. Re-sync to retry."));
+        if (log.raw_candidate_count != null) review.append(el("p", "muted", `${log.raw_candidate_count} candidate passage pair${log.raw_candidate_count === 1 ? "" : "s"} grouped into ${log.active_count} distinct policy issue${log.active_count === 1 ? "" : "s"}.`));
+        review.append(renderTable("Potential discrepancies requiring review", ["Policy issue / topic", "Status", "Document A", "Document B", "Review"], log.discrepancies.map(item => [
+          item.topic || "Policy issue", badge("Needs Review", "warn"), item.document_a.filename, item.document_b.filename,
+          button("View details", () => run(async () => {
+            const detail = await aceAuth.request(`/api/admin/discrepancies/${encodeURIComponent(item.generation)}/${item.id}`);
+            renderDialog("Potential policy discrepancy", issueDetails(detail));
+          }))
+        ])));
+        const completed = log.scan_status === "succeeded";
+        const label = completed ? (log.active_count ? "Completed with discrepancies" : "Completed with no supported discrepancies") : scanLabels[log.scan_status] || "Unknown";
+        const summary = renderCards([["Active potential discrepancies", completed ? log.active_count : "Unavailable", "Needs Review"], ["Last successful discrepancy scan", date(log.last_success), "Local analysis"], ["Last scan status", label, "Current index"]]);
+        summary.className += " scan-summary";
+        show(summary, review, knowledgePanel(state));
+        refreshTimer = setTimeout(() => run(navigate), state.running ? 3000 : 10000);
+        return;
+      }
     } catch (error) {
       if (version !== navigationVersion) return;
       show(panel("Unable to load this section", "Please retry. Your saved records remain available.", button("Retry", () => run(navigate))));

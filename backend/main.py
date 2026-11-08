@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks
 from .sync_service import SyncService, SyncBusy
 from .drive_auth import DriveAuthError, auth_mode
 from . import search as knowledge_search
+from .discrepancies import review_log
 import re
 import secrets
 import time
@@ -88,9 +89,13 @@ def create_app(url=None):
         if (os.getenv('KNOWLEDGE_SOURCE', 'drive') == 'drive' and auth_mode() == 'adc'
                 and 'DRIVE_AUTH_MODE' not in os.environ):
             logger.warning('DRIVE_AUTH_MODE is unset; this process uses ADC. Local OAuth requires restarting with DRIVE_AUTH_MODE=oauth_local and the approved account/folder environment.')
-        required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms'}
+        required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms', 'discrepancy_scan', 'discrepancies'}
         if not required.issubset(inspect(app.state.engine).get_table_names()):
             logger.error('Knowledge schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+        elif not {'issue_id', 'evidence_pairs'}.issubset({c['name'] for c in inspect(app.state.engine).get_columns('discrepancies')}):
+            logger.error('Discrepancy grouping schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+        elif 'revision' not in {c['name'] for c in inspect(app.state.engine).get_columns('discrepancy_scan')}:
+            logger.error('Discrepancy scan revision schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
         if 'offices' not in inspect(app.state.engine).get_table_names():
             logger.error('Office catalog is missing. Run python -m backend.offices with the server database configuration before serving requests.')
         async def schedule():
@@ -338,6 +343,19 @@ def create_app(url=None):
 
     class FolderSettings(BaseModel):
         folder_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,200}$')
+
+    @app.get('/api/admin/discrepancies', dependencies=[Depends(admin)])
+    def discrepancies():
+        return review_log(factory, include_evidence=False)
+
+    @app.get('/api/admin/discrepancies/{generation}/{identifier}', dependencies=[Depends(admin)])
+    def discrepancy_details(generation: str, identifier: str):
+        # Reverify all evidence on each request. The stable issue ID survives
+        # re-syncs; the generation prevents showing a stale source comparison.
+        for item in review_log(factory)['discrepancies']:
+            if item['generation'] == generation and item['id'] == identifier:
+                return item
+        raise HTTPException(404, 'This discrepancy is no longer available. Refresh the Find & Fix Log.')
 
     @app.get('/api/admin/knowledge', dependencies=[Depends(admin)])
     @app.get('/api/admin/documents', dependencies=[Depends(admin)])

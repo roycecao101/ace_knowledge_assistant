@@ -10,9 +10,10 @@ from .search_language import (query_text, question_terms, root, roots, prefixes 
                               passage_terms, office_entry_matches)
 from .search_context import context_passages
 from .timing_policy import timing_fact, timing_conflict
+from .policy_conflicts import potential_conflict
 
 NOT_FOUND = "I could not find this in Ace's approved materials."
-CONFLICT = 'These approved passages disagree. Please check with your manager which one applies.'
+CONFLICT = 'These approved documents disagree. Please check with your manager which one applies.'
 UNAVAILABLE = 'The assistant is unavailable right now. Please check the documents directly or ask your manager.'
 DAYS = 'monday tuesday wednesday thursday friday saturday sunday'.split()
 NUMBERS = dict(zip('zero one two three four five six seven eight nine ten eleven twelve'.split(), map(str, range(13))))
@@ -21,7 +22,7 @@ TIME = r'\b(?:' + '|'.join(DAYS) + r'|daily|weekly|monthly|annually|morning|afte
 # rather than whichever file happens to be on disk when a request arrives.
 REVISION = hashlib.sha256(b''.join(Path(__file__).with_name(name).read_bytes() for name in (
     'search.py', 'search_language.py', 'search_context.py', 'timing_policy.py',
-    'document_indexer.py', 'document_parser.py', 'taxonomy.py'))).hexdigest()[:16]
+    'document_indexer.py', 'document_parser.py', 'taxonomy.py', 'policy_conflicts.py'))).hexdigest()[:16]
 
 
 def unavailable():
@@ -183,6 +184,7 @@ def search(factory, question, office, category, deadline=None, diagnostics=None)
                 if time.monotonic() > deadline:
                     return unavailable()
                 if (contradictory(previous['quote'], result['quote'], previous['heading'], result['heading'])
+                        or potential_conflict(previous['quote'], result['quote'], previous['heading'], result['heading'])
                         or timing_conflict(question, previous['quote'], result['quote'], previous['heading'], result['heading'])):
                     return {'status': 'conflict', 'message': CONFLICT, 'results': [previous, result]}
             # Prefer evidence in the quotation over heading-only context, then

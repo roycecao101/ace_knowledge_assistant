@@ -160,6 +160,19 @@ function assertSignedOut(page) {
   assert.equal(page.nodes.get('#results')['aria-busy'], 'false');
 }
 
+test('employee conflict shows both quotations and the exact required message', async () => {
+  const page = await searchPage([[200,{status:'conflict',results:[
+    {quote:'Fictional equipment inspection occurs every Monday before opening.',filename:'Fiction A.docx',heading:'Inspection',office:'Company-wide'},
+    {quote:'Fictional equipment inspection occurs every Tuesday before opening.',filename:'Fiction B.docx',heading:'Inspection',office:'Company-wide'},
+  ]}]]);
+  await page.submit();
+  const text = renderedText(page.nodes.get('#results'));
+  assert.ok(text.includes('These approved documents disagree. Please check with your manager which one applies.'));
+  assert.ok(text.includes('Monday') && text.includes('Tuesday'));
+  assert.ok(text.includes('Fiction A.docx') && text.includes('Fiction B.docx'));
+  assert.ok(!text.includes('Find & Fix'));
+});
+
 test('401 after an active search clears employee UI and blocks follow-up submissions', async () => {
   const page = await searchPage([[200, {status: 'found', results: [{
     quote: 'Synthetic old answer.', filename: 'Fiction.docx', heading: 'Synthetic section', office: 'Company-wide',

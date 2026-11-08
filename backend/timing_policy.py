@@ -38,6 +38,11 @@ def timing_fact(question, text, heading=''):
     condition = request_condition(question)
     if condition is None:
         return None
+    return fact_for_condition(condition, text, heading)
+
+
+def fact_for_condition(condition, text, heading=''):
+    """Shared source analysis; the caller supplies a condition, never a prompt."""
     occurrence, event, actor = condition
     # An unqualified event rule can apply to the question's generic possessor.
     # An explicitly different possessor cannot supply that evidence.
@@ -87,6 +92,11 @@ def timing_fact(question, text, heading=''):
 
 def timing_conflict(question, first, second, first_heading='', second_heading=''):
     a, b = timing_fact(question, first, first_heading), timing_fact(question, second, second_heading)
+    return facts_disagree(a, b)
+
+
+def facts_disagree(a, b):
+    """Disjoint, unbounded durations for the same counted event and units."""
     if not a or not b or a[:2] != b[:2] or a[3] or b[3]:
         return False
     low_a, high_a, unit_a, kind_a = a[2]

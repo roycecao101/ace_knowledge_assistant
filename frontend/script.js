@@ -77,7 +77,7 @@ function renderResult(data, synthetic = false) {
     card.append(element("p", "result-message", "I could not find this in Ace's approved materials."));
   } else if (data.status === "conflict") {
     card.append(element("h2", "result-title", "⚠ Conflicting information"));
-    card.append(element("p", "result-message", "These approved passages disagree. Please check with your manager which one applies."));
+    card.append(element("p", "result-message", "These approved documents disagree. Please check with your manager which one applies."));
     data.results.forEach(result => card.append(renderQuote(result)));
   } else {
     card.append(element("h2", "result-title", "! Assistant unavailable"));

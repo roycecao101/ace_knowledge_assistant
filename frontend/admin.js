@@ -28,11 +28,11 @@ const sections = [
   ["knowledge", "Knowledge Management", "Connect Google Drive, synchronize documents, and review your index."],
   ["offices", "Office Management", "Manage office names and codes used across your workspace."],
   ["admins", "Admin Management", "Manage secure administrator access."],
-  ["guardian", "Policy Guardian", "Review the status of policy change monitoring."],
+  ["find-fix", "Find & Fix Log", "Review potential discrepancies in approved policies."],
 ];
 function sectionForHash() {
   const requested = location.hash.slice(1);
-  const id = ({documents: "knowledge", sync: "knowledge", settings: "knowledge", pulse: "guardian"})[requested] || requested;
+  const id = ({documents: "knowledge", sync: "knowledge", settings: "knowledge", pulse: "find-fix", guardian: "find-fix"})[requested] || requested;
   return sections.find(section => section[0] === id) || sections[0];
 }
 
@@ -52,13 +52,7 @@ function previewData() {
       ["Sample Office Checklist.docx", "Front Office", ["NOR"], "Nov 7, 2026 · 06:00 EST"],
       ["Sample Safety Guide.pdf", "OSHA & Safety", ["ALP", "LIL/ADC"], "Nov 7, 2026 · 06:00 EST"],
     ],
-    pulse: [
-      { kind: "Modified", file: "Sample Onboarding.pdf", offices: ["ALP", "NOR", "LIL/ADC"], detail: "Sample orientation timing changed.", before: "Synthetic policy: Orientation is held in week one.", after: "Synthetic policy: Orientation is held before the first scheduled shift." },
-      { kind: "Added", file: "Sample Office Checklist.docx", offices: ["NOR"], detail: "New sample checklist indexed.", before: "No prior indexed version.", after: "Synthetic checklist: Review the daily office checklist." },
-      { kind: "Renamed", file: "Sample Safety Guide.pdf", offices: ["ALP", "LIL/ADC"], detail: "Previously: Sample Safety Notes.pdf", before: "Filename: Sample Safety Notes.pdf", after: "Filename: Sample Safety Guide.pdf · Content unchanged." },
-      { kind: "Moved", file: "Sample Scheduling.pdf", offices: ["ALP", "NOR"], detail: "Office scope changed from ALP to NOR.", before: "Folder: Demo / ALP / Front Office", after: "Folder: Demo / NOR / Front Office · No content change." },
-      { kind: "Deleted", file: "Sample Retired Procedure.pdf", offices: ["LIL/ADC"], detail: "Removed from the knowledge index.", before: "Synthetic retired procedure: Use the old sample checklist.", after: "Document deleted. No current indexed version." },
-    ],
+
   };
 }
 
@@ -226,8 +220,7 @@ function startPreview() {
       const usage = panel("Ace-wide usage", "Aggregate totals only · fictional reporting period: November 2026");
       usage.append(renderTable("No employee-level analytics or question text", ["Metric", "Total"], [["Searches", "1,248"], ["Source-backed answers", "1,096"], ["Unresolved searches", "152"], ["Paid AI questions today", "84 / 300"]]));
       grid.append(sync, usage); content.append(grid);
-      const pulse = panel("Policy Guardian", "Five sample changes ready for Miriam to review.", button("Review policy changes →", () => { location.hash = "guardian"; }, "primary"));
-      pulse.append(el("p", "change-summary", "1 added · 1 modified · 1 renamed · 1 moved · 1 deleted")); content.append(pulse);
+      content.append(panel("Find & Fix Log", "Review potential policy discrepancies after synchronization.", button("Open Find & Fix Log", () => { location.hash = "find-fix"; }, "primary")));
     },
     employees() {
       const p = panel("Employee directory", "PIN hashes and existing PINs are never included in the frontend.", button("Create employee", createEmployee, "primary"));
@@ -276,14 +269,9 @@ function startPreview() {
       p.append(renderForm([{ name: "folder", label: "Google Drive knowledge-folder ID", value: "DEMO_FOLDER_ID_NOT_CONNECTED" }], "Preview settings request", () => unavailable("Save settings")));
       content.append(p);
     },
-    guardian() {
-      content.append(renderCards([["Added", "1", "New knowledge"], ["Modified", "1", "Content updated"], ["Renamed / moved", "2", "Names and office scope"], ["Deleted", "1", "Removed from the index"]]));
-      const p = panel("Policy Guardian", "For Miriam · Compare sample versions and check highlighted office labels. All text is synthetic.");
-      p.append(renderTable("Changes detected in the last successful sample sync", ["Change", "Document", "Affected offices", "Details", "Review"], data.pulse.map(change => [badge(change.kind, change.kind === "Deleted" ? "error" : change.kind === "Modified" ? "warn" : ""), change.file, officeLabels(change.offices), change.detail, button("View changes", () => {
-        const before = el("section"); before.append(el("h3", "", "Previous version · Nov 6, 2026"), el("div", "version before", change.before));
-        const after = el("section"); after.append(el("h3", "", "Current version · Nov 7, 2026"), el("div", "version after", change.after));
-        renderDialog(`${change.kind}: ${change.file}`, [officeLabels(change.offices), el("p", "muted", "Synthetic version comparison · not Ace policy. Live version access must be authorized by the backend."), before, after]);
-      })]))); content.append(p);
+    "find-fix"() {
+      content.append(renderCards([["Active potential discrepancies", "0", "Synthetic preview"], ["Last successful discrepancy scan", lastSync, "Sample timestamp"], ["Last scan status", "Completed", "Synthetic preview"]]));
+      content.append(panel("Find & Fix Log", "The live workspace shows verified quotation pairs. Review them with the appropriate manager, update authorized source documents in Google Drive, then re-sync.", button("Re-sync now", () => unavailable("Re-sync"), "primary")));
     },
   };
   function navigate(initial = false) {

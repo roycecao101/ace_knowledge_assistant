@@ -11,6 +11,7 @@ from .taxonomy import filename_offices
 from .offices import scope_codes
 from .drive_client import FileUnreadable
 from .drive_auth import DriveAuthError, validate_folder
+from .discrepancies import publish_scan
 
 class SyncBusy(Exception):
     pass
@@ -151,6 +152,7 @@ class SyncService:
                     last_success=time.time(), error='', lease_until=0, lease_token=''))
                 if not published.rowcount:
                     raise RuntimeError('Sync lease expired')
+                publish_scan(db, generation)
                 # Old snapshots are no longer needed; deletion is in the same transaction.
                 stage = 'old snapshot cleanup'
                 db.execute(delete(PassageTerm).where(PassageTerm.generation != generation))

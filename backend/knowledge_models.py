@@ -44,3 +44,25 @@ class PassageTerm(Base):
     passage_id: Mapped[int] = mapped_column(primary_key=True)
     term: Mapped[str] = mapped_column(String(150), primary_key=True, index=True)
     generation: Mapped[str] = mapped_column(String(40), index=True)
+
+class DiscrepancyScan(Base):
+    __tablename__ = 'discrepancy_scan'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20))
+    last_attempt: Mapped[float] = mapped_column(Float)
+    last_success: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+class Discrepancy(Base):
+    """References only: quotations stay in the private, current source snapshot."""
+    __tablename__ = 'discrepancies'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation: Mapped[str] = mapped_column(String(40), index=True)
+    passage_a: Mapped[int] = mapped_column(Integer)
+    passage_b: Mapped[int] = mapped_column(Integer)
+    # Nullable for additive upgrades. Legacy pair rows await a new scan.
+    issue_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Each side is one passage ID, or an ordered list of IDs for an exact,
+    # contiguous source window. Quotations are reconstructed and reverified.
+    evidence_pairs: Mapped[list | None] = mapped_column(JSON, nullable=True)
