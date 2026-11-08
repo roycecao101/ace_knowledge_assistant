@@ -18,7 +18,9 @@ window.aceAuth = {
     if (response.status === 401) {
       this.csrf = ""; this.user = null;
       location.replace(location.pathname.includes("admin") ? "/admin-login.html" : "/login.html");
-      throw new Error("Your session expired. Please sign in again.");
+      const error = new Error("Your session expired. Please sign in again.");
+      error.status = 401;
+      throw error;
     }
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Please check the supplied values.");

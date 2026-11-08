@@ -8,11 +8,24 @@ from .knowledge_models import KnowledgeState, Document, Passage, PassageTerm
 from .document_parser import parse, Unreadable
 from .document_indexer import index_document
 from .taxonomy import filename_offices
+from .offices import scope_codes
 from .drive_client import FileUnreadable
 from .drive_auth import DriveAuthError, validate_folder
 
 class SyncBusy(Exception):
     pass
+
+def safe_extraction_error(message):
+    """Only fixed diagnostics may leave the extractor, including legacy rows."""
+    allowed = {
+        'Password-protected PDF', 'PDF has a page without extractable text; OCR is not enabled',
+        'Empty PDF', 'PDF extraction failed', 'Word archive exceeds extraction limit',
+        'Word document contains no extractable text', 'Word extraction failed',
+        'Unsupported format; use a text PDF, .docx, or Google Doc',
+        'Google Drive does not permit download/export of this file',
+        'Legacy Word .doc is unsupported; convert to .docx or Google Docs in Drive',
+    }
+    return message if not message or message in allowed else 'File extraction failed. Provide an approved readable version in Drive, then re-sync.'
 
 class SyncService:
     def __init__(self, factory, source_factory=None):
@@ -48,7 +61,7 @@ class SyncService:
                 last_success=state.last_success, last_attempt=state.last_attempt,
                 error=error, running=running, documents=[dict(file_id=d.file_id, filename=d.filename,
                 category=d.category, offices=d.offices, modified=d.modified, content_hash=d.content_hash,
-                status='unreadable' if d.error else 'indexed', error=d.error) for d in documents])
+                status='unreadable' if d.error else 'indexed', error=safe_extraction_error(d.error)) for d in documents])
 
     def configure(self, folder_id):
         if os.getenv('KNOWLEDGE_SOURCE', 'drive') == 'drive':
@@ -92,6 +105,8 @@ class SyncService:
             source = self.source_factory()
             stage = 'folder inventory'
             inventory = source.inventory(folder)
+            with self.factory() as db:
+                codes = scope_codes(db)
             seen, staged, total_bytes = set(), [], 0
             if len(inventory) > 1000:
                 raise ValueError('Knowledge folder exceeds 1000-file limit')
@@ -109,9 +124,9 @@ class SyncService:
                     if total_bytes > 100 * 1024 * 1024:
                         raise ValueError('Knowledge folder exceeds 100 MB snapshot limit')
                     stage = 'text extraction'
-                    parsed = parse(data, file.mime, file.name)
+                    parsed = parse(data, file.mime, file.name, codes)
                 except (Unreadable, FileUnreadable) as exc:
-                    error = str(exc)
+                    error = safe_extraction_error(str(exc))
                 staged.append((file, hashlib.sha256(data).hexdigest(), parsed, error))
                 if time.time() >= now+540:
                     raise TimeoutError('Sync exceeded its time limit')
@@ -120,7 +135,7 @@ class SyncService:
                 for file, content_hash, parsed, error in staged:
                     scopes = [s.offices for s in parsed.sections if s.searchable] if parsed else []
                     offices = (sorted({o for scope in scopes for o in scope}) if scopes and all(scopes)
-                               else [] if scopes else filename_offices(file.name))
+                               else [] if scopes else filename_offices(file.name, codes))
                     doc = Document(generation=generation, file_id=file.id, filename=file.name, mime_type=file.mime,
                         category=file.category, offices=offices, modified=file.modified,
                         content_hash=content_hash, source_text=parsed.source if parsed else '', error=error)

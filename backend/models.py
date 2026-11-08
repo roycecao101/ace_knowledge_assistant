@@ -16,6 +16,12 @@ class Employee(Account, Base):
 class Administrator(Account, Base):
     __tablename__ = 'administrators'
 
+class Office(Base):
+    __tablename__ = 'offices'
+    code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    name_key: Mapped[str] = mapped_column(String(120), unique=True)
+
 class AuthSession(Base):
     __tablename__ = 'authentication_sessions'
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

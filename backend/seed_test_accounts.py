@@ -7,6 +7,8 @@ from .auth import hasher
 
 def initialize(engine):
     Base.metadata.create_all(engine)
+    from .offices import initialize as initialize_offices
+    initialize_offices(engine)
     if engine.dialect.name == 'sqlite' and engine.url.database not in (None, ':memory:'):
         from pathlib import Path
         Path(engine.url.database).chmod(0o600)

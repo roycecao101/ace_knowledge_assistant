@@ -13,7 +13,7 @@ from backend.document_indexer import verify_quote
 from backend.drive_client import PDF, DOCX, GDOC, FOLDER, DriveClient, SourceFile
 from backend.local_source import LocalSource
 from backend.sync_service import SyncService, SyncBusy
-from backend.knowledge_models import Document, Passage, KnowledgeState
+from backend.knowledge_models import Document, Passage, PassageTerm, KnowledgeState
 from backend.search import search, NOT_FOUND, CONFLICT, UNAVAILABLE
 from backend.taxonomy import filename_offices, CATEGORIES
 
@@ -1247,3 +1247,323 @@ def test_authenticated_synonym_query_filters_and_company_access(env):
         assert result['status'] == 'found'
         assert {r['file_id'] for r in result['results']} == ({'one', 'two'} if office == 'Norcross' else {'one'})
         assert next(r for r in result['results'] if r['file_id'] == 'one')['office'] == 'Company-wide'
+
+
+@pytest.mark.parametrize('mime', [PDF, DOCX])
+@pytest.mark.parametrize('body,question', [
+    ('Model rockets are not permitted in either office.', 'Can I bring model rockets to the office?'),
+    ('Otters are allowed in the office.', 'May we bring otters into the office?'),
+    ('Balloons are prohibited in the office.', 'Could I bring balloons in the office?'),
+    ('Staff cannot bring model rockets into the office.', 'May I bring model rockets to the office?'),
+    ('Employees may bring kites to the office.', 'Can we bring kites into the office?'),
+    ('Model rockets are forbidden in the office.', 'Are model rockets allowed in the office?'),
+    ('Kites are permitted in offices.', 'Can I bring kites into the office?'),
+])
+def test_general_office_entry_permission_language(env, mime, body, question):
+    app, src = env
+    data = pdf(body) if mime == PDF else word([('Synthetic visitor rules', 1), (body, 0)])
+    src.add('one', 'Synthetic visitors.' + ('pdf' if mime == PDF else 'docx'), data, mime)
+    assert app.state.sync.run()
+    result = ask(app, question)
+    assert result['status'] == 'found'
+    assert result['results'][0]['quote'] == body
+    assert verify_quote(body, parse(data, mime, 'Synthetic visitors').source)
+
+
+@pytest.mark.parametrize('body,question', [
+    ('Model rockets are not permitted in either office.', 'Can I bring damaged model rockets to the office?'),
+    ('Model rockets are not permitted in either office.', 'Can I purchase model rockets?'),
+    ('Model rockets are not permitted in either office.', 'Can I store model rockets in the office?'),
+    ('Model rockets are not permitted in either office.', 'Can I use model rockets in the office?'),
+    ('Employees may purchase model rockets in the office.', 'Can I bring model rockets to the office?'),
+    ('Model rockets are inspected in the office.', 'Can I bring model rockets to the office?'),
+    ('Model rockets are allowed to malfunction in the office.', 'Can I bring model rockets to the office?'),
+    ('Model rockets are inspected. Otters are permitted in the office.', 'Can I bring model rockets to the office?'),
+    ('Employees are allowed in the office. Model rockets are stored nearby.', 'Can I bring model rockets to the office?'),
+])
+def test_office_entry_requires_matching_entity_and_relation(env, body, question):
+    app, src = env
+    src.add('one', 'Synthetic unrelated.docx', word([(body, 0)]), DOCX)
+    assert app.state.sync.run()
+    assert ask(app, question)['status'] == 'not_found'
+
+
+def test_office_entry_keeps_filters_quotes_and_conflicts(env):
+    app, src = env
+    body = 'Model rockets are not permitted in either office.'
+    src.add('one', 'NOR - Synthetic entry.docx', word([(body, 0)]), DOCX, category='OSHA & Safety')
+    assert app.state.sync.run()
+    question = 'Can I bring model rockets to the office?'
+    assert ask(app, question, office='Norcross', category='OSHA & Safety')['status'] == 'found'
+    assert ask(app, question, office='Alpharetta')['status'] == 'not_found'
+    assert ask(app, question, office='Norcross', category='Front Office')['status'] == 'not_found'
+    src.add('two', 'Synthetic opposite.pdf', pdf(body.replace('not ', '')))
+    assert app.state.sync.run()
+    assert ask(app, question, office='Norcross')['status'] == 'conflict'
+    assert ask(app, question, office='Alpharetta')['status'] == 'found'
+    with app.state.factory.begin() as db:
+        document = db.scalar(select(Document).where(Document.file_id == 'one'))
+        passage = db.scalar(select(Passage).where(Passage.document_id == document.id))
+        passage.text = body.replace('not ', '')
+    result = ask(app, question, office='Norcross')
+    assert result['status'] == 'found'
+    assert {r['file_id'] for r in result['results']} == {'two'}
+
+
+@pytest.mark.parametrize('sentence', ['Stop.', 'Return badges.', 'Keep doors closed.',
+    'Model rockets are prohibited.', 'Model rockets are not permitted.'])
+def test_complete_short_sentence_and_fragment_validation(sentence):
+    source = 'Employees follow these fictional visitor rules. ' + sentence + ' Training occurs every Thursday.'
+    assert len(sentence.split()) < 6
+    assert verify_quote(sentence, source)
+    assert not verify_quote(sentence.rstrip('.'), source)
+    assert not verify_quote(sentence.replace('.', '!'), source)
+
+
+def test_short_document_drive_add_delete_without_app_restart_preserves_controls(env):
+    """Real Drive adapter/API lifecycle; only Google's transport is mocked."""
+    app, _ = env
+    seed(app.state.factory)
+    controls = [
+        (TEXT, 'When does equipment inspection occur?', 'found'),
+        ('Staff must purchase telescope supplies through the observatory portal.',
+         'How do employees buy telescope supplies?', 'found'),
+        ('Emergency supplies are stored beside the purple cabinet.', 'Where are emergency supplies stored?', 'found'),
+        ('The training coordinator approves visitor permits.', 'Who approves visitor permits?', 'found'),
+        ('Employees receive 30 dollars for telescope repairs.', 'How much do staff receive for telescope repairs?', 'found'),
+        ('Employees receive four days of observatory leave.', 'How many days of observatory leave do employees receive?', 'conflict'),
+    ]
+    inventory = {str(i): (f'Synthetic control {i}.pdf', PDF, pdf(body))
+                 for i, (body, _, _) in enumerate(controls)}
+    inventory['opposite'] = ('Synthetic opposite.pdf', PDF, pdf('Employees receive six days of observatory leave.'))
+    files = Mock()
+    files.get.side_effect = lambda **kw: Mock(execute=Mock(return_value=(
+        {'id': 'synthetic', 'mimeType': FOLDER} if kw['fileId'] == 'synthetic' else
+        {'id': kw['fileId'], 'mimeType': inventory[kw['fileId']][1], 'parents': ['synthetic']})))
+    files.list.return_value.execute.side_effect = lambda: {'files': [
+        {'id': key, 'name': name, 'mimeType': mime} for key, (name, mime, _) in inventory.items()]}
+    files.get_media.side_effect = lambda **kw: kw['fileId']
+    class Downloader:
+        def __init__(self, stream, request, **kwargs):
+            self.stream, self.request = stream, request
+        def next_chunk(self, **kwargs):
+            self.stream.write(inventory[self.request][2])
+            return None, True
+    app.state.sync.source_factory = lambda: DriveClient(Mock(files=Mock(return_value=files)))
+    administrator, employee = login(app), login(app, 'employee')
+    def request(question, office='Alpharetta', category='All Categories'):
+        response = employee.post('/api/search', json=dict(question=question, office=office, category=category))
+        assert response.status_code == 200
+        return response.json()
+    def synchronize():
+        with patch('googleapiclient.http.MediaIoBaseDownload', Downloader):
+            assert administrator.post('/api/admin/sync').status_code == 202
+        assert administrator.get('/api/admin/knowledge').json()['sync_status'] == 'succeeded'
+    synchronize()
+    baseline = [request(question) for _, question, _ in controls]
+    assert [r['status'] for r in baseline] == [status for _, _, status in controls]
+    question, short = 'Are model rockets permitted?', 'Model rockets are not permitted.'
+    assert request(question)['status'] == 'not_found'
+    inventory['added'] = ('Synthetic short.docx', DOCX, word([(short, 0)]))
+    # Source changes do not affect search until a successful publication.
+    assert request(question)['status'] == 'not_found'
+    synchronize()
+    with app.state.factory() as db:
+        document = db.scalar(select(Document).where(Document.file_id == 'added'))
+        active = db.get(KnowledgeState, 1).active_generation
+        assert document.source_text == short and document.generation == active
+        passages = db.scalars(select(Passage).where(Passage.document_id == document.id)).all()
+        assert len(passages) == 1 and passages[0].text == short
+        passage_id = passages[0].id
+        assert db.scalars(select(PassageTerm).where(PassageTerm.passage_id == passage_id)).all()
+    for office in ['Alpharetta', 'Norcross', 'Lilburn']:
+        for category in CATEGORIES:
+            result = request(question, office, category)
+            assert result['status'] == 'found' and result['results'][0]['quote'] == short
+    assert [request(question) for _, question, _ in controls] == baseline
+    inventory.pop('added')  # Drive deletion (or move outside the approved inventory).
+    assert request(question)['status'] == 'found'
+    synchronize()
+    assert request(question)['status'] == 'not_found'
+    with app.state.factory() as db:
+        active = db.get(KnowledgeState, 1).active_generation
+        assert db.scalar(select(Document).where(Document.file_id == 'added')) is None
+        assert db.scalar(select(Passage).where(Passage.id == passage_id)) is None
+        assert db.scalar(select(PassageTerm).where(PassageTerm.passage_id == passage_id)) is None
+        assert all(p.generation == active for p in db.scalars(select(Passage)))
+        assert all(t.generation == active for t in db.scalars(select(PassageTerm)))
+    assert [request(question) for _, question, _ in controls] == baseline
+
+
+@pytest.mark.parametrize('mime', [PDF, DOCX])
+@pytest.mark.parametrize('question', [
+    'Are ferrets permitted in either office?',
+    'Can I bring a ferret to the office?',
+    "What is Ace's policy on bringing a pet ferret to work?",
+    'What are the rules regarding bringing my ferret into the workplace?',
+    'Could you please explain whether I can bring my pet ferret to work?',
+    'Is it okay for me to bring a ferret to work?',
+    'Am I allowed to bring a ferret into the office?',
+    'I would like to know if we may bring ferrets to work.',
+    'What is the policy about taking a ferret to the office?',
+])
+def test_conversational_permission_paraphrases(env, mime, question):
+    app, src = env
+    body = 'Ferrets are not permitted in either office.'
+    data = pdf(body) if mime == PDF else word([(body, 0)])
+    src.add('one', 'Synthetic presence policy', data, mime)
+    assert app.state.sync.run()
+    result = ask(app, question)
+    assert result['status'] == 'found'
+    assert result['results'][0]['quote'] == body
+    assert verify_quote(result['results'][0]['quote'], body)
+
+
+@pytest.mark.parametrize('body,question', [
+    ('Portable projectors are prohibited in the office.',
+     "What is Ace's policy on bringing a portable projector to work?"),
+    ('Bonsai trees are allowed in the workplace.',
+     'Is it OK to bring a bonsai tree to work?'),
+    ('Staff may bring kites into the office.',
+     'Could you tell me if I can take my kite to work?'),
+    ('Ferrets are prohibited.', 'Can I bring a pet ferret to work?'),
+    ('Staff must contact the coordinator about telescope repairs.',
+     'How do employees get in touch with the coordinator about telescope repairs?'),
+    ('Staff must reach out to the coordinator about telescope repairs.',
+     'How do employees contact the coordinator about telescope repairs?'),
+    ('Employees return borrowed telescope lenses before closing.',
+     'When do staff give back borrowed telescope lenses?'),
+    ('Employees give back borrowed telescope lenses before closing.',
+     'When do staff return borrowed telescope lenses?'),
+    ('Late employees must inform the coordinator immediately.',
+     "I'm trying to find out what staff should do if they are running late."),
+    ('Staff must purchase telescope supplies through the portal.',
+     "What is Ace's policy regarding procuring telescope supplies?"),
+])
+def test_conversational_concepts_are_general_and_symmetric(env, body, question):
+    app, src = env
+    src.add('one', 'Synthetic language.docx', word([(body, 0)]), DOCX)
+    assert app.state.sync.run()
+    result = ask(app, question)
+    assert result['status'] == 'found'
+    assert result['results'][0]['quote'] == body
+
+
+@pytest.mark.parametrize('question', [
+    "What is Ace's policy on bringing a pet lemur to work?",
+    "What is Ace's policy on buying a pet ferret at work?",
+    "What is Ace's policy on storing ferrets at work?",
+    "What is Ace's policy on bringing an injured ferret to work?",
+    'Can I bring a ferret to work without permission?',
+    'Can I bring a ferret to work after closing?',
+    'Can I bring a ferret to work for a medical exemption?',
+    'Can I bring a ferret to work and get reimbursed?',
+    'How much is the fee for bringing a ferret to work?',
+    'When may I bring a ferret to work?',
+    'Who approves bringing a ferret to work?',
+])
+def test_conversational_paraphrases_preserve_unknown_facts_and_conditions(env, question):
+    app, src = env
+    src.add('one', 'Synthetic presence.docx', word([('Ferrets are not permitted in either office.', 0)]), DOCX)
+    assert app.state.sync.run()
+    assert ask(app, question)['message'] == NOT_FOUND
+
+
+@pytest.mark.parametrize('body', [
+    'Ferret cages are permitted in the office.',
+    'Pictures of ferrets are permitted in the office.',
+    'Ferret transport is permitted in the office.',
+    'Pet ferrets are permitted in the office.',
+    'Staff may purchase ferrets in the office.',
+    'Ferrets are inspected in the office.',
+    'Ferrets are permitted in the laboratory.',
+    'Ferrets are permitted in the office after closing.',
+])
+@pytest.mark.parametrize('question', ['Can I bring ferrets to work?', 'Are ferrets permitted in the office?'])
+def test_permission_matches_actual_object_and_supported_scope(env, body, question):
+    app, src = env
+    src.add('one', 'Synthetic different rule.docx', word([(body, 0)]), DOCX)
+    assert app.state.sync.run()
+    assert ask(app, question)['message'] == NOT_FOUND
+
+
+def test_pet_role_can_use_exact_or_blanket_rule(env):
+    app, src = env
+    body = 'Pet ferrets are prohibited in the office.'
+    src.add('one', 'Synthetic qualified.docx', word([(body, 0)]), DOCX)
+    assert app.state.sync.run()
+    result = ask(app, 'Can I bring my pet ferret to work?')
+    assert result['status'] == 'found' and result['results'][0]['quote'] == body
+    assert ask(app, 'Can I bring my ferret to work?')['status'] == 'not_found'
+
+
+def test_short_policy_ranks_above_longer_equivalent_sources(env):
+    app, src = env
+    for i in range(6):
+        src.add(str(i), f'Synthetic verbose {i}.docx', word([
+            ('Ferrets are not permitted in either office.', 0),
+            ('Employees complete fictional telescope training every Monday.', 0)] * 10), DOCX)
+    short = 'Ferrets are prohibited.'
+    src.add('short', 'Synthetic terse.docx', word([(short, 0)]), DOCX)
+    assert app.state.sync.run()
+    result = ask(app, "What is Ace's policy on bringing a pet ferret to work?")
+    assert result['status'] == 'found'
+    assert result['results'][0]['file_id'] == 'short'
+    assert result['results'][0]['quote'] == short
+
+
+def test_conversational_sync_filters_quote_integrity_and_no_cache(env):
+    app, src = env
+    seed(app.state.factory)
+    employee = login(app, 'employee')
+    questions = [
+        "What is Ace's policy on bringing a pet ferret to work?",
+        'Are ferrets allowed in the office?',
+        'Could you tell me whether I may bring my ferret to work?',
+    ]
+    def request(question, office='Norcross', category='OSHA & Safety'):
+        response = employee.post('/api/search', json=dict(question=question, office=office, category=category))
+        assert response.status_code == 200
+        return response.json()
+    assert app.state.sync.run()
+    assert all(request(q)['status'] == 'not_found' for q in questions)
+    body = 'Ferrets are not permitted in either office.'
+    src.add('new', 'NOR - Synthetic presence.docx', word([(body, 0)]), DOCX, category='OSHA & Safety')
+    assert all(request(q)['status'] == 'not_found' for q in questions)
+    assert app.state.sync.run()
+    for q in questions:
+        for office in ['Alpharetta', 'Norcross', 'Lilburn']:
+            for category in CATEGORIES:
+                result = request(q, office, category)
+                eligible = office == 'Norcross' and category in ['All Categories', 'OSHA & Safety']
+                assert result['status'] == ('found' if eligible else 'not_found')
+                if eligible:
+                    assert result['results'][0]['quote'] == body
+    src.add('opposite', 'NOR - Synthetic opposite.docx', word([(body.replace('not ', ''), 0)]),
+            DOCX, category='OSHA & Safety')
+    assert app.state.sync.run()
+    for q in questions:
+        result = request(q)
+        assert result['status'] == 'conflict'
+        assert {r['file_id'] for r in result['results']} == {'new', 'opposite'}
+    src.files.pop('opposite')
+    assert app.state.sync.run()
+    # Verification still uses the exact stored source, after language matching.
+    with app.state.factory.begin() as db:
+        passage = db.scalar(select(Passage))
+        passage.text = body.replace('not ', '')
+    assert all(request(q)['status'] == 'not_found' for q in questions)
+    assert app.state.sync.run()
+    assert all(request(q)['status'] == 'found' for q in questions)
+    # A successful publication changes eligibility immediately on the same app.
+    src.add('new', 'ALP - Synthetic renamed.docx', word([(body, 0)]), DOCX, category='Front Office')
+    assert app.state.sync.run()
+    assert all(request(q)['status'] == 'not_found' for q in questions)
+    assert all(request(q, 'Alpharetta', 'Front Office')['status'] == 'found' for q in questions)
+    src.files.clear()
+    assert app.state.sync.run()
+    assert all(request(q, 'Alpharetta', 'Front Office')['status'] == 'not_found' for q in questions)
+    with app.state.factory() as db:
+        assert db.scalar(select(Document)) is None
+        assert db.scalar(select(Passage)) is None
+        assert db.scalar(select(PassageTerm)) is None

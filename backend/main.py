@@ -13,16 +13,16 @@ import time
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, update, inspect
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .database import database
-from .models import Employee, Administrator, AuthSession, LoginAttempt
+from .models import Employee, Administrator, AuthSession, LoginAttempt, Office
+from .offices import catalog
 from .auth import hasher, DUMMY, verify, digest, resolve, serialize, lock_admin_changes
 
 FRONTEND = Path(__file__).resolve().parent.parent / 'frontend'
-OFFICES = ['Alpharetta', 'Norcross', 'Lilburn']
 CATEGORIES = ['All Categories', 'HR & Employee Policies', 'OSHA & Safety', 'Front Office', 'Back Office / Clinical Operations', 'Insurance & Documentation (non-PHI)', 'Management & Operations', 'Training & Onboarding', 'Scripts & Communication']
 logger = logging.getLogger('uvicorn.error')
 
@@ -34,6 +34,32 @@ class NewEmployee(BaseModel):
     id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
     name: str = Field(min_length=1, max_length=120)
     office: str
+
+class EmployeeDetails(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    office: str
+
+class NewOffice(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    code: str = Field(min_length=2, max_length=10)
+
+    @field_validator('name')
+    @classmethod
+    def valid_name(cls, value):
+        value = ' '.join(value.split())
+        if not re.fullmatch(r"[\w][\w .&'()’-]{0,119}", value) or not any(c.isalpha() for c in value):
+            raise ValueError('Use a readable office name with letters and optional numbers.')
+        if value.casefold() in {'company-wide', 'all offices', 'all', 'company wide'}:
+            raise ValueError('Choose a specific office name.')
+        return value
+
+    @field_validator('code')
+    @classmethod
+    def valid_code(cls, value):
+        value = value.strip().upper()
+        if not re.fullmatch(r'[A-Z][A-Z0-9]{1,9}', value):
+            raise ValueError('Use 2–10 letters or digits, starting with a letter.')
+        return value
 
 class NewAdmin(BaseModel):
     id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
@@ -65,6 +91,8 @@ def create_app(url=None):
         required = {'knowledge_state', 'knowledge_documents', 'knowledge_passages', 'knowledge_terms'}
         if not required.issubset(inspect(app.state.engine).get_table_names()):
             logger.error('Knowledge schema is incomplete. Run python -m backend.initialize_knowledge with the server database configuration.')
+        if 'offices' not in inspect(app.state.engine).get_table_names():
+            logger.error('Office catalog is missing. Run python -m backend.offices with the server database configuration before serving requests.')
         async def schedule():
             while True:
                 try:
@@ -184,8 +212,8 @@ def create_app(url=None):
         return response
 
     @app.post('/api/search')
-    async def search(body: Search, request: Request, identity=Depends(authenticated)):
-        if body.office not in OFFICES or body.category not in CATEGORIES:
+    async def search(body: Search, request: Request, identity=Depends(authenticated), db=Depends(db_session)):
+        if not db.scalar(select(Office).where(Office.name == body.office)) or body.category not in CATEGORIES:
             raise HTTPException(422, 'Invalid search filters.')
         # No contents or employee-query associations are persisted or logged.
         # Explicit development/admin diagnostics return only fixed stage counts.
@@ -204,18 +232,52 @@ def create_app(url=None):
             headers['X-Ace-Search-Trace'] = ','.join(f'{key}={value}' for key, value in trace.items())
         return JSONResponse(result, headers=headers)
 
+    @app.get('/api/offices', dependencies=[Depends(authenticated)])
+    @app.get('/api/admin/offices', dependencies=[Depends(admin)])
+    def offices(db=Depends(db_session)):
+        return catalog(db)
+
+    @app.post('/api/admin/offices', status_code=201, dependencies=[Depends(admin)])
+    def create_office(body: NewOffice, db=Depends(db_session)):
+        # Serialize catalog writes and keep aliases in the same code namespace.
+        lock_admin_changes(db)
+        existing = catalog(db)
+        codes = {c for o in existing for c in [o['code'], *o['aliases']]}
+        names = {o['name'].casefold() for o in existing}
+        if (body.code in codes or body.name.casefold() in names
+                or body.name.upper() in codes or body.code.casefold() in names):
+            raise HTTPException(409, 'Office name or code already exists, including office aliases.')
+        db.add(Office(code=body.code, name=body.name, name_key=body.name.casefold()))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, 'Office name or code already exists.') from None
+        return {'name': body.name, 'code': body.code, 'aliases': []}
+
     @app.get('/api/admin/employees', dependencies=[Depends(admin)])
     def employees(db=Depends(db_session)):
         return [dict(serialize(a, 'employee'), active=a.active, office=a.office) for a in db.scalars(select(Employee))]
 
     @app.post('/api/admin/employees', dependencies=[Depends(admin)])
     def create_employee(body: NewEmployee, db=Depends(db_session)):
-        if body.office not in OFFICES:
+        if not db.scalar(select(Office).where(Office.name == body.office)):
             raise HTTPException(422, 'Invalid office.')
         pin = f'{secrets.randbelow(100000000):08d}'
         db.add(Employee(id=body.id, name=body.name, office=body.office, credential_hash=hasher.hash(pin)))
         db.commit()
         return {'pin': pin}
+
+    @app.patch('/api/admin/employees/{identifier}/details', dependencies=[Depends(admin)])
+    def employee_details(identifier: str, body: EmployeeDetails, db=Depends(db_session)):
+        if not body.name.strip() or not db.scalar(select(Office).where(Office.name == body.office)):
+            raise HTTPException(422, 'Invalid employee name or office.')
+        result = db.execute(update(Employee).where(Employee.id == identifier).values(
+            name=body.name.strip(), office=body.office, version=Employee.version + 1))
+        if not result.rowcount:
+            raise HTTPException(404, 'Employee not found.')
+        db.commit()
+        return {'ok': True}
 
     @app.patch('/api/admin/employees/{identifier}', dependencies=[Depends(admin)])
     def employee_status(identifier: str, body: Status, db=Depends(db_session)):

@@ -6,7 +6,8 @@ from pathlib import Path
 from sqlalchemy import select, or_
 from .knowledge_models import KnowledgeState, Document, Passage, PassageTerm
 from .document_indexer import term, verify_quote, normalize
-from .search_language import query_text, question_terms, root, roots, prefixes as word_prefixes, passage_terms
+from .search_language import (query_text, question_terms, root, roots, prefixes as word_prefixes,
+                              passage_terms, office_entry_matches)
 from .search_context import context_passages
 from .timing_policy import timing_fact, timing_conflict
 
@@ -39,6 +40,8 @@ def answers(question, text, heading=''):
     """
     q = normalize(query_text(question))
     t = normalize(text)
+    if not office_entry_matches(query_text(question), text):
+        return False
     if re.search(r'(?i)\bhow far out\b', question) and not re.search(
             r'\b(?:\d+(?:\s*[-–—]\s*\d+)?|' + '|'.join(NUMBERS) + r')[\s-]+(?:hours?|days?|weeks?|months?|years?)\b', text, re.I):
         return False

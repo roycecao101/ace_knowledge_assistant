@@ -61,13 +61,65 @@ def test_generic_failures(app):
     a.patch("/api/admin/employees/ALP-01",json={"active":False})
     assert login(c).json() == first.json()
 
-def test_deactivation(app):
+def test_deactivation(app, monkeypatch):
+    calls = []
+    def synthetic_search(*args, **kwargs):
+        calls.append(True)
+        return {'status': 'not_found'}
+    monkeypatch.setattr('backend.main.knowledge_search.search', synthetic_search)
     c=TestClient(app); other=TestClient(app)
-    login(c); login(other)
+    assert login(c).status_code == 200
+    assert login(other).status_code == 200
+    assert search(c).json() == {'status': 'not_found'}
+    assert search(other).status_code == 200
+    calls.clear()
+    anonymous = TestClient(app)
+    generic_error = search(anonymous).json()
     a=admin(app)
     assert a.patch("/api/admin/employees/ALP-01",json={"active":False}).status_code==200
-    assert search(c).status_code==401
-    assert search(other).status_code==401
+    for client in (c, other):
+        for _ in range(2):  # The next question and follow-up questions all fail.
+            response = search(client)
+            assert response.status_code == 401
+            assert response.json() == generic_error
+        assert client.get('/api/auth/me').status_code == 401
+        page = client.get('/index.html', follow_redirects=False)
+        assert page.status_code == 303 and page.headers['location'] == '/login.html'
+    assert calls == []  # Rejection happens before the search service runs.
+    failure = login(TestClient(app), identifier='UNKNOWN')
+    for client in (c, TestClient(app)):
+        response = login(client)
+        assert response.status_code == 401
+        assert response.json() == failure.json()
+        assert 'set-cookie' not in response.headers
+
+    assert a.patch('/api/admin/employees/ALP-01', json={'active': True}).status_code == 200
+    for client in (c, other):
+        assert search(client).status_code == 401
+        assert client.get('/api/auth/me').status_code == 401
+    assert calls == []  # Reactivation cannot restore either old session.
+    assert login(c).status_code == 200
+    assert search(c).status_code == 200
+    assert len(calls) == 1
+
+
+def test_search_rechecks_active_status_independently_of_session_version(app, monkeypatch):
+    from backend.models import Employee
+    from sqlalchemy import update
+    c = TestClient(app)
+    assert login(c).status_code == 200
+    # Verify the active-account check itself, independent of version revocation.
+    with app.state.factory() as db:
+        db.execute(update(Employee).where(Employee.id == 'ALP-01').values(active=False))
+        db.commit()
+    def unexpected_search(*args, **kwargs):
+        pytest.fail('Inactive employee reached the search service')
+    monkeypatch.setattr('backend.main.knowledge_search.search', unexpected_search)
+    c.headers.pop('X-CSRF-Token')
+    response = search(c)
+    assert response.status_code == 401
+    assert response.json() == {'detail': 'Please sign in again.'}
+    assert 'X-CSRF-Error' not in response.headers
 
 def test_pin_replacement(app):
     c=TestClient(app); login(c); a=admin(app)

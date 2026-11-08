@@ -23,7 +23,7 @@ class Parsed:
     source: str
     sections: list[Section]
 
-def parse_pdf(data, filename):
+def parse_pdf(data, filename, codes=None):
     import pymupdf
     try:
         with pymupdf.open(stream=data, filetype='pdf') as pdf:
@@ -52,7 +52,7 @@ def parse_pdf(data, filename):
                     elif assistant_heading(block_text) and len(block_text.split()) <= 30:
                         # Ambiguous assistant-directed headings fail closed until a styled heading.
                         blocked = True
-                    sections.append(Section(block_text, '', number, filename_offices(filename), not blocked))
+                    sections.append(Section(block_text, '', number, filename_offices(filename, codes), not blocked))
             if not sections:
                 raise Unreadable('Empty PDF')
             return Parsed('\n'.join(pages), sections)
@@ -61,7 +61,7 @@ def parse_pdf(data, filename):
     except Exception:
         raise Unreadable('PDF extraction failed') from None
 
-def parse_docx(data, filename):
+def parse_docx(data, filename, codes=None):
     from docx import Document
     from docx.text.paragraph import Paragraph
     from docx.table import Table
@@ -70,7 +70,7 @@ def parse_docx(data, filename):
             if sum(i.file_size for i in archive.infolist()) > 100 * 1024 * 1024:
                 raise Unreadable('Word archive exceeds extraction limit')
         doc = Document(BytesIO(data))
-        baseline = filename_offices(filename)
+        baseline = filename_offices(filename, codes)
         scopes, sections, source, headings = [], [], [], []
         heading = 'Document body'
         blocked = []
@@ -90,7 +90,7 @@ def parse_docx(data, filename):
                     while blocked and blocked[-1][0] >= level:
                         blocked.pop()
                     blocked.append((level, assistant_heading(text) or (blocked[-1][1] if blocked else False)))
-                    scoped = heading_offices(text)
+                    scoped = heading_offices(text, codes)
                     # Explicit headings reset the same-level scope; child headings inherit.
                     offices = scoped or (scopes[-1][1] if scopes else baseline)
                     if baseline and scoped:
@@ -133,7 +133,7 @@ def parse_docx(data, filename):
                             allowed = not table_blocked and not (blocked and blocked[-1][1])
                             for value in context[1:]:
                                 allowed = allowed and not assistant_heading(value)
-                                named = heading_offices(value)
+                                named = heading_offices(value, codes)
                                 if named:
                                     offices = [o for o in named if not offices or o in offices]
                                     allowed = allowed and bool(offices)
@@ -146,9 +146,9 @@ def parse_docx(data, filename):
     except Exception:
         raise Unreadable('Word extraction failed') from None
 
-def parse(data, mime, filename):
+def parse(data, mime, filename, codes=None):
     if mime == PDF:
-        return parse_pdf(data, filename)
+        return parse_pdf(data, filename, codes)
     if mime in (DOCX, GDOC):
-        return parse_docx(data, filename)
+        return parse_docx(data, filename, codes)
     raise Unreadable('Unsupported format; use a text PDF, .docx, or Google Doc')

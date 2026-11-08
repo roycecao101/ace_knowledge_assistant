@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const vm = require('node:vm');
 const source = readFileSync(require('node:path').join(__dirname, '../frontend/auth-client.js'), 'utf8');
-function setup(responses) {
+function setup(responses, pathname = '/admin.html') {
   const calls = [], redirects = [];
-  const context = {window: {}, location: {pathname: '/admin.html', replace: path => redirects.push(path)},
+  const context = {window: {}, location: {pathname, replace: path => redirects.push(path)},
     fetch: async (path, options) => {
       calls.push({path, ...options});
       assert.ok(responses.length, 'Unexpected extra request');
@@ -21,6 +21,19 @@ function setup(responses) {
 }
 const me = (token, id = 'fictional-admin', role = 'admin') => [200, {csrf_token: token, user: {id, role}}];
 const rejected = [403, {detail: 'Invalid CSRF token.'}, 'invalid'];
+
+test('authentication failures carry status, clear state and redirect without retry', async () => {
+  for (const [pathname, destination] of [['/index.html', '/login.html'], ['/admin.html', '/admin-login.html']]) {
+    const {auth, calls, redirects} = setup([me('current'), [401, {}]], pathname);
+    await auth.init();
+    await assert.rejects(auth.request('/api/search', 'POST', {question: 'Synthetic question'}),
+      error => error.status === 401);
+    assert.equal(auth.csrf, '');
+    assert.equal(auth.user, null);
+    assert.deepEqual(redirects, [destination]);
+    assert.equal(calls.length, 2);
+  }
+});
 
 test('new page obtains current token and sends cookie/token on mutations', async () => {
   const {auth, calls} = setup([me('current'), [200, {ok: true}]]);

@@ -3,7 +3,7 @@
 /* Shared dashboard components and isolated synthetic preview.
  * Live requests are implemented in live-admin.js through auth-client.js:
  * GET /api/auth/me restores the existing session and CSRF token.
- * GET /api/admin/knowledge supplies Documents, Synchronization, and Settings.
+ * GET /api/admin/knowledge supplies the consolidated Knowledge Management page.
  * POST /api/admin/sync starts synchronization; PATCH /api/admin/settings saves
  * the folder ID. GET /api/admin/sync is not the status endpoint.
  * All requests use the same origin as the FastAPI-served administrator page.
@@ -24,14 +24,17 @@ if (previewMode) {
 }
 const sections = [
   ["overview", "Overview", "A clear view of your team’s knowledge workspace."],
-  ["employees", "Employee Management", "Manage access across offices. All records shown here are fictional."],
-  ["documents", "Document Management", "Knowledge indexed from Google Drive. Manage source files in Drive."],
-  ["sync", "Google Drive Synchronization", "Monitor indexing and review synchronization issues."],
-  ["offices", "Office Management", "Keep office labels and knowledge access organized."],
-  ["admins", "Admin Management", "Separate administrator access with a minimum of two active administrators."],
-  ["settings", "Settings", "Knowledge sources, inference limits, and operating information."],
-  ["pulse", "Policy Pulse", "X-factor · Help Miriam spot policy updates and affected offices."],
+  ["employees", "Employee Management", "Manage employee access and home-office assignments."],
+  ["knowledge", "Knowledge Management", "Connect Google Drive, synchronize documents, and review your index."],
+  ["offices", "Office Management", "Manage office names and codes used across your workspace."],
+  ["admins", "Admin Management", "Manage secure administrator access."],
+  ["guardian", "Policy Guardian", "Review the status of policy change monitoring."],
 ];
+function sectionForHash() {
+  const requested = location.hash.slice(1);
+  const id = ({documents: "knowledge", sync: "knowledge", settings: "knowledge", pulse: "guardian"})[requested] || requested;
+  return sections.find(section => section[0] === id) || sections[0];
+}
 
 // Fictional fixtures are instantiated only inside an explicit local preview.
 function previewData() {
@@ -131,7 +134,11 @@ function renderDialog(title, children, cleanup = () => {}) {
   dialogContent.replaceChildren(heading, ...children);
   modal.showModal();
 }
-modal.addEventListener("close", () => { dialogCleanup(); dialogCleanup = () => {}; dialogContent.replaceChildren(); });
+modal.addEventListener("close", () => {
+  // A queued close event from the account form must not clear a new PIN dialog.
+  if (modal.open) return;
+  dialogCleanup(); dialogCleanup = () => {}; dialogContent.replaceChildren();
+});
 document.querySelector("#close-dialog").addEventListener("click", () => modal.close());
 function renderForm(fields, submitLabel, onSubmit) {
   const form = el("form", "form");
@@ -139,10 +146,14 @@ function renderForm(fields, submitLabel, onSubmit) {
     const label = el("label", "", field.label);
     const input = el(field.options ? "select" : "input");
     input.name = field.name;
-    if (field.options) field.options.forEach(value => { const option = el("option", "", value); option.value = value; input.append(option); });
-    else { input.type = field.type || "text"; input.maxLength = 120; }
+    if (field.options) field.options.forEach(value => {
+      const option = el("option", "", typeof value === "object" ? value.label : value);
+      option.value = typeof value === "object" ? value.value : value; input.append(option);
+    });
+    else { input.type = field.type || "text"; input.maxLength = field.maxLength || 120; }
     input.required = field.required !== false;
     if (field.value !== undefined) input.value = field.value;
+    if (field.pattern) input.pattern = field.pattern;
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     label.append(input);
@@ -150,7 +161,15 @@ function renderForm(fields, submitLabel, onSubmit) {
     form.append(label);
   });
   const submit = el("button", "primary", submitLabel); submit.type = "submit"; form.append(submit);
-  form.addEventListener("submit", event => { event.preventDefault(); onSubmit(new FormData(form)); });
+  const feedback = el("div"); feedback.setAttribute("role", "status"); form.append(feedback);
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    submit.disabled = true; feedback.replaceChildren();
+    try { await onSubmit(new FormData(form)); }
+    catch (error) { renderStatus(error.message, "error", feedback); }
+    finally { submit.disabled = false; }
+  });
   return form;
 }
 function unavailable(action) {
@@ -190,6 +209,7 @@ function startPreview() {
   const lastSync = "Nov 7, 2026 · 06:00 EST";
   const createEmployee = () => previewForm("Create employee", [{ name: "id", label: "Employee ID" }, { name: "name", label: "Display name" }, { name: "office", label: "Home office", options: data.offices.map(o => o[1]) }]);
   const renderers = {
+    knowledge() { renderers.sync(); renderers.documents(); renderers.settings(); },
     overview() {
       content.append(renderCards([
         ["Active employees", String(data.employees.filter(e => e.active).length), "Across all three offices · sample data"],
@@ -199,14 +219,14 @@ function startPreview() {
       ]));
       renderStatus("Latest sync attempt failed at 08:00 EST: Google Drive connection expired. The last successful index remains available. Review synchronization before retrying.", "error", content.appendChild(el("div")));
       const grid = el("div", "two-columns");
-      const sync = panel("Knowledge health", "Keep the team connected to current source material.", button("Review sync", () => { location.hash = "sync"; }));
+      const sync = panel("Knowledge health", "Keep the team connected to current source material.", button("Review sync", () => { location.hash = "knowledge"; }));
       const dl = el("dl");
       [["Last successful synchronization", lastSync], ["Current synchronization status", "Failed · attention required"], ["Unreadable files", "2 sample files need review"]].forEach(([k,v]) => dl.append(el("dt", "", k), el("dd", "", v)));
       sync.append(dl);
       const usage = panel("Ace-wide usage", "Aggregate totals only · fictional reporting period: November 2026");
       usage.append(renderTable("No employee-level analytics or question text", ["Metric", "Total"], [["Searches", "1,248"], ["Source-backed answers", "1,096"], ["Unresolved searches", "152"], ["Paid AI questions today", "84 / 300"]]));
       grid.append(sync, usage); content.append(grid);
-      const pulse = panel("Policy Pulse — X-factor", "Five sample changes ready for Miriam to review.", button("Review policy changes →", () => { location.hash = "pulse"; }, "primary"));
+      const pulse = panel("Policy Guardian", "Five sample changes ready for Miriam to review.", button("Review policy changes →", () => { location.hash = "guardian"; }, "primary"));
       pulse.append(el("p", "change-summary", "1 added · 1 modified · 1 renamed · 1 moved · 1 deleted")); content.append(pulse);
     },
     employees() {
@@ -252,19 +272,13 @@ function startPreview() {
       }))); p.append(el("p", "panel-description", "Deactivation is disabled because this example has exactly two active administrators.")); content.append(p);
     },
     settings() {
-      const p = panel("Knowledge & inference", "Sample settings only. Connection secrets belong exclusively on the backend.");
-      p.append(renderForm([
-        { name: "folder", label: "Google Drive knowledge-folder ID", value: "DEMO_FOLDER_ID_NOT_CONNECTED", help: "Fictional placeholder. The backend must validate folder access using its secure Drive integration." },
-        { name: "paid", label: "Paid AI inference", options: ["Enabled (sample)", "Disabled"] },
-        { name: "cap", label: "Daily AI question cap", type: "number", min: 1, max: 100000, value: 300, help: "Defaults to 300 when paid inference is enabled. Enforce the Ace-wide limit on the server; this browser cannot enforce usage caps." },
-      ], "Preview settings request", () => unavailable("Save settings"))); content.append(p);
-      const system = panel("System configuration & monthly costs", "Illustrative estimates only, not a provider quote or actual Ace costs.");
-      system.append(renderTable("Fictional monthly operating budget · USD", ["Component", "Configuration", "Monthly estimate"], [["Application hosting", "Python / FastAPI · backend pending", "$15"], ["Knowledge storage", "Google Drive + search index", "$5"], ["AI inference", "Usage dependent · 300 questions/day cap", "$10–$40"], ["Estimated total", "No live billing integration", "$30–$60"]]));
-      system.append(el("p", "panel-description", "A question cap is not a dollar spending limit. Model choice, tokens, and provider pricing determine costs. Configure credentials, retention, authentication, CSRF protection, and spending controls on the server.")); content.append(system);
+      const p = panel("Settings", "Synthetic settings preview. Connection secrets belong exclusively on the backend.");
+      p.append(renderForm([{ name: "folder", label: "Google Drive knowledge-folder ID", value: "DEMO_FOLDER_ID_NOT_CONNECTED" }], "Preview settings request", () => unavailable("Save settings")));
+      content.append(p);
     },
-    pulse() {
+    guardian() {
       content.append(renderCards([["Added", "1", "New knowledge"], ["Modified", "1", "Content updated"], ["Renamed / moved", "2", "Names and office scope"], ["Deleted", "1", "Removed from the index"]]));
-      const p = panel("Policy Pulse — X-factor", "For Miriam · Compare sample versions and check highlighted office labels. All text is synthetic.");
+      const p = panel("Policy Guardian", "For Miriam · Compare sample versions and check highlighted office labels. All text is synthetic.");
       p.append(renderTable("Changes detected in the last successful sample sync", ["Change", "Document", "Affected offices", "Details", "Review"], data.pulse.map(change => [badge(change.kind, change.kind === "Deleted" ? "error" : change.kind === "Modified" ? "warn" : ""), change.file, officeLabels(change.offices), change.detail, button("View changes", () => {
         const before = el("section"); before.append(el("h3", "", "Previous version · Nov 6, 2026"), el("div", "version before", change.before));
         const after = el("section"); after.append(el("h3", "", "Current version · Nov 7, 2026"), el("div", "version after", change.after));
@@ -273,8 +287,7 @@ function startPreview() {
     },
   };
   function navigate(initial = false) {
-    const id = location.hash.slice(1);
-    const section = sections.find(s => s[0] === id) || sections[0];
+    const section = sectionForHash();
     navigation.querySelectorAll("a").forEach(link => { if (link.dataset.section === section[0]) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
     document.querySelector("#breadcrumb").textContent = section[1];
     document.querySelector("#page-title").textContent = section[1];

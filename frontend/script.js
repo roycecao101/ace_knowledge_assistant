@@ -44,6 +44,7 @@ const welcome = document.querySelector("#welcome");
 const searchButton = document.querySelector("#search-button");
 const searchLabel = document.querySelector("#search-label");
 let searching = false;
+let signInRequired = false;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -94,10 +95,10 @@ function renderResult(data, synthetic = false) {
 
 function setLoading(active) {
   searching = active;
-  searchButton.disabled = active;
-  questionInput.disabled = active;
-  officeSelect.disabled = active;
-  categorySelect.disabled = active;
+  searchButton.disabled = active || signInRequired;
+  questionInput.disabled = active || signInRequired;
+  officeSelect.disabled = active || signInRequired;
+  categorySelect.disabled = active || signInRequired;
   searchLabel.textContent = active ? "Searching…" : "Search";
   resultsRegion.setAttribute("aria-busy", String(active));
   if (active) {
@@ -108,6 +109,20 @@ function setLoading(active) {
     loading.append(spinner, element("span", "", "Searching approved company documents…"));
     resultsRegion.replaceChildren(loading);
   }
+}
+
+function clearAuthenticatedUI() {
+  signInRequired = true;
+  document.querySelector("#employee-name").textContent = "";
+  document.querySelector("#auth-status").textContent = "Sign in required";
+  document.querySelector("#admin-dashboard-link").hidden = true;
+  document.querySelector("#logout").disabled = true;
+  questionInput.value = "";
+  officeSelect.value = "";
+  categorySelect.value = "";
+  welcome.hidden = true;
+  resultsRegion.replaceChildren(element("p", "result-message", "Please sign in again."));
+  setLoading(false);
 }
 
 // A preview is possible only on loopback/file URLs with an explicit URL flag.
@@ -126,7 +141,7 @@ if (previewMode) {
 
 form.addEventListener("submit", async event => {
   event.preventDefault();
-  if (searching || previewMode) return;
+  if (searching || previewMode || signInRequired) return;
   const question = questionInput.value.trim();
   if (!question) {
     questionInput.setCustomValidity("Enter a question to search.");
@@ -138,9 +153,11 @@ form.addEventListener("submit", async event => {
   setLoading(true);
   try {
     renderResult(await searchApi.search(question, office, category));
-  } catch {
+  } catch (error) {
     // Do not log question text, responses, or employee information.
-    renderResult({ status: "unavailable" });
+    // The shared client has already cleared authentication and begun redirecting.
+    if (error.status === 401) clearAuthenticatedUI();
+    else renderResult({ status: "unavailable" });
   } finally {
     setLoading(false);
   }
@@ -193,7 +210,20 @@ if (previewMode) {
 
 if (!previewMode) {
   searchButton.disabled = true;
-  aceAuth.init().then(user => {
+  let homeOffice;
+  async function refreshOffices() {
+    const offices = await aceAuth.request("/api/offices");
+    const selected = officeSelect.value || homeOffice;
+    officeSelect.replaceChildren(...offices.map(office => {
+      const option = element("option", "", `${office.name} (${[office.code, ...office.aliases].join(" / ")})`);
+      option.value = office.name;
+      return option;
+    }));
+    officeSelect.value = offices.some(o => o.name === selected) ? selected : homeOffice;
+  }
+  aceAuth.init().then(async user => {
+    homeOffice = user.home_office;
+    await refreshOffices();
     document.querySelector("#employee-name").textContent = user.name;
     document.querySelector("#auth-status").textContent = user.role === "admin" ? "Administrator · Employee View" : "Signed in";
     officeSelect.value = user.home_office;
@@ -202,5 +232,12 @@ if (!previewMode) {
     logout.disabled = false; logout.title = "Sign out";
     logout.addEventListener("click", () => aceAuth.logout().catch(() => location.replace("/login.html")));
     searchButton.disabled = false;
-  }).catch(() => { document.querySelector("#auth-status").textContent = "Sign in required"; });
+    officeSelect.addEventListener("focus", () => refreshOffices().catch(error => {
+      if (error.status === 401) clearAuthenticatedUI();
+      else document.querySelector("#auth-status").textContent = "Office list could not refresh. Try again.";
+    }));
+  }).catch(error => {
+    if (error.status === 401) clearAuthenticatedUI();
+    else document.querySelector("#auth-status").textContent = "Sign in required";
+  });
 }

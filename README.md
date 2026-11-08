@@ -6,6 +6,8 @@ FastAPI serves the existing employee and administrator pages and same-origin aut
 
 For the existing Google Drive installation, use the [current restart instructions](docs/dashboard-sync-fix.md#starting-from-vs-code). They load the private local environment before launching FastAPI. Keep the existing database and accounts; the fresh-install fixture instructions below are not required for a restart.
 
+When upgrading to the consolidated administrator dashboard, run `python -m backend.offices` with the same `DATABASE_URL` as the server before restarting. This additive migration creates the persistent office catalog and required office labels, preserving all existing accounts, assignments, sessions, and knowledge records. It has already been applied to this workspace's existing database. See the [dashboard implementation and validation report](docs/admin-dashboard-cleanup.md).
+
 From this project root, activate your existing virtual environment, then run:
 
 ```sh
@@ -35,13 +37,13 @@ Set `APP_ENV=production` and `APP_ORIGIN=https://your-actual-host` behind HTTPS.
 
 SQLAlchemy models and a `DATABASE_URL` setting provide a path to PostgreSQL. Install a PostgreSQL driver, provision the schema with a reviewed migration, and securely provision at least two real administrators before deployment. The local seed command intentionally refuses production and non-SQLite databases. Schema changes currently require explicit migrations; application startup does not mutate the schema or credentials.
 
-Search uses the active approved document generation and verifies returned quotations locally. Google Drive synchronization, indexed/unreadable document reporting, folder settings, and account management are connected. Office management and Policy Pulse retain their existing unconnected status. Questions and answers are not stored, and no employee usage analytics are created. Document extraction and search run locally without an external AI service. See the [ingestion guide](docs/ingestion.md) and [OAuth setup](docs/google-drive-oauth.md).
+Search uses the active approved document generation and verifies returned quotations locally. Knowledge Management consolidates Google Drive connection status, synchronization, indexed/unreadable document metadata, and folder settings. Office Management supports persistent office creation, unique names/codes, and the LIL/ADC aliases for Lilburn. Employee selectors and creation/edit forms use the database catalog. Re-sync after adding an office to apply its code and heading name to existing document scopes. Policy Guardian is a clean placeholder; its synthetic preview remains available. Questions and answers are not stored, and no employee usage analytics are created. Document extraction and search run locally without an external AI service. See the [ingestion guide](docs/ingestion.md) and [OAuth setup](docs/google-drive-oauth.md).
 
 ## Verification
 
 ```sh
 python -m pytest -q
-node --test tests/test_auth_client.cjs tests/test_employee_search_ui.cjs
+node --test tests/test_auth_client.cjs tests/test_employee_search_ui.cjs tests/test_admin_dashboard_ui.cjs
 ```
 
 Tests use fresh temporary databases, fictional identities, and synthetic questions. They cover the official logins/home offices, failed attempts and lock duration, deactivation across clients, PIN/session invalidation, administrator access, role denial, administrator minimums, logout, unauthenticated searches, CSRF/origin checks, password constraints, expiration, one-time PIN creation, and idempotent seeding.
