@@ -40,6 +40,15 @@ def add(c, name='Duluth', code='DUL'):
     return c.post('/api/admin/offices', json={'name':name, 'code':code})
 
 
+def test_shared_frontend_stylesheet_is_served_without_broadening_asset_access(app):
+    c = TestClient(app)
+    stylesheet = c.get('/ui.css')
+    assert stylesheet.status_code == 200
+    assert stylesheet.headers['content-type'].startswith('text/css')
+    assert '--teal:' in stylesheet.text
+    assert c.get('/unapproved.css').status_code == 404
+
+
 def test_catalog_and_idempotent_additive_migration(app):
     c = client(app)
     with app.state.factory() as db:

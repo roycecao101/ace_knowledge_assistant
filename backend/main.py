@@ -408,9 +408,13 @@ def create_app(url=None):
             return RedirectResponse('/admin-login.html' if is_admin else '/login.html', 303)
         return FileResponse(FRONTEND / ('admin.html' if is_admin else 'index.html'))
 
+    @app.get('/assets/ace-logo.webp', include_in_schema=False)
+    def brand_logo():
+        return FileResponse(FRONTEND / 'assets' / 'ace-logo.webp', media_type='image/webp')
+
     @app.get('/{filename}')
     def asset(filename: str):
-        if filename not in {'login.html', 'admin-login.html', 'login.js', 'auth-client.js', 'live-admin.js', 'login.css', 'style.css', 'admin.css', 'script.js', 'admin.js'}:
+        if filename not in {'login.html', 'admin-login.html', 'login.js', 'auth-client.js', 'live-admin.js', 'login.css', 'style.css', 'admin.css', 'ui.css', 'script.js', 'admin.js'}:
             raise HTTPException(404)
         return FileResponse(FRONTEND / filename)
     return app

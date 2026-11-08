@@ -55,11 +55,11 @@ function element(tag, className, text) {
 
 function renderQuote(result) {
   const sourceCard = element("div", "quote");
-  sourceCard.append(element("blockquote", "", result.quote));
+  sourceCard.append(element("span", "quote-label", "Verified quotation"), element("blockquote", "", result.quote));
   const source = element("div", "source");
-  source.append(element("strong", "", result.filename));
-  if (result.heading) source.append(element("span", "", result.heading));
-  if (Number.isInteger(result.page) && result.page > 0) source.append(element("span", "", `Page ${result.page}`));
+  source.append(element("strong", "source-filename", result.filename));
+  if (result.heading) source.append(element("span", "source-heading", result.heading));
+  if (Number.isInteger(result.page) && result.page > 0) source.append(element("span", "source-page", `Page ${result.page}`));
   source.append(element("span", "office-badge", result.office));
   sourceCard.append(source);
   return sourceCard;

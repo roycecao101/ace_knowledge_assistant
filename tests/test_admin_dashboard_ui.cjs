@@ -53,7 +53,8 @@ async function dashboard(hash = '#overview') {
   const document = {
     querySelector(selector) { if (!nodes.has(selector)) nodes.set(selector,new Element()); return nodes.get(selector); },
     querySelectorAll() { return []; },
-    createElement: tag => new Element(tag), createTextNode: value => {const n = new Element('#text'); n.textContent = value; return n;},
+    createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag),
+    createTextNode: value => {const n = new Element('#text'); n.textContent = value; return n;},
     addEventListener() {},
   };
   const context = {document,Node:Element,location:{hostname:'localhost',protocol:'http:',search:'',hash},
@@ -90,6 +91,10 @@ async function dashboard(hash = '#overview') {
         }
         if (url === '/api/admin/settings') {state.folder_id = body.folder_id; return {ok:true};}
         if (url === '/api/admin/sync') return {status:'scheduled'};
+        if (/\/api\/admin\/(employees|admins)\/[^/]+$/.test(url) && method === 'PATCH') {
+          const accounts = url.includes('/employees/') ? employees : admins;
+          Object.assign(accounts.find(a => url.endsWith(`/${a.id}`)), body); return {ok:true};
+        }
         if (url.endsWith('/details')) { Object.assign(employees[0],body); return {ok:true}; }
         throw new Error(`Unexpected fixture request: ${url}`);
       },
@@ -102,7 +107,7 @@ async function dashboard(hash = '#overview') {
   const click = async node => { assert.ok(node,'Expected visible control'); await node.listeners.click(); await tick(); };
   const navigate = async hash => { context.location.hash = hash; events.hashchange(); await tick(); };
   const submit = async form => { await form.listeners.submit({preventDefault(){}}); await tick(); };
-  return {nodes,calls,offices,state,log,click,navigate,submit,context,content:nodes.get('#content'),modal:nodes.get('#modal'),dialog:nodes.get('#dialog-content')};
+  return {nodes,calls,offices,employees,admins,state,log,click,navigate,submit,context,content:nodes.get('#content'),modal:nodes.get('#modal'),dialog:nodes.get('#dialog-content')};
 }
 
 test('six sections render, legacy knowledge links resolve, and unknown links recover', async () => {
@@ -113,7 +118,8 @@ test('six sections render, legacy knowledge links resolve, and unknown links rec
     await page.navigate(hash);
     assert.equal(page.nodes.get('#page-title').textContent,'Knowledge Management');
     assert.equal(page.content.querySelectorAll('h2').filter(n => n.textContent === 'Google Drive Connection').length,1);
-    assert.ok(text(page.content).includes('synthetic-folder'));
+    assert.equal(field(page.content.querySelector('form'), 'folder_id').value, 'synthetic-folder');
+    assert.equal(page.content.querySelector('summary').textContent, 'Advanced Settings');
     assert.ok(text(page.content).includes('Synthetic <b>literal</b>.docx'));
     assert.ok(text(page.content).includes('Password-protected PDF'));
     assert.equal(links.find(n => n.dataset.section === 'knowledge').attributes['aria-current'],'page');
@@ -131,13 +137,15 @@ test('six sections render, legacy knowledge links resolve, and unknown links rec
 test('Find & Fix alert, verified detail refresh, sync, resolved and failed states render', async () => {
   const page = await dashboard();
   const alert = page.content.querySelectorAll('a').find(n => n.href === '#find-fix');
-  assert.ok(alert && alert.textContent.includes('1 potential policy discrepancies require review'));
+  assert.ok(alert && alert.textContent.includes('1 potential policy discrepancy requires review'));
   await page.navigate('#find-fix');
   assert.ok(text(page.content).includes('Last successful discrepancy scan'));
   assert.ok(text(page.content).includes('Fiction A.docx'));
   assert.ok(text(page.content).includes('Policy issue / topic'));
   assert.ok(text(page.content).includes('Synthetic telescope calibration schedule'));
   assert.ok(text(page.content).includes('6 candidate passage pairs grouped into 1 distinct policy issue.'));
+  assert.ok(!text(page.content).includes('Google Drive Connection'));
+  assert.ok(!text(page.content).includes('synthetic-folder'));
   assert.equal(page.content.querySelectorAll('blockquote').length,0);
   assert.equal(page.content.querySelectorAll('tr').length,2); // One header, one issue.
   await page.click(byText(page.content,'button','View details'));
@@ -220,11 +228,14 @@ test('knowledge controls call existing sync/settings APIs and running sync preve
   await page.click(byText(page.content,'button','Re-sync now'));
   assert.ok(page.calls.some(c => c.url === '/api/admin/sync' && c.method === 'POST'));
   const form = page.content.querySelector('form');
+  const folderPattern = new RegExp(`^(?:${field(form, 'folder_id').pattern})$`, 'v');
+  assert.equal(folderPattern.test('synthetic-folder_1'), true);
+  assert.equal(folderPattern.test('invalid folder'), false);
   field(form,'folder_id').value = 'synthetic-updated'; await page.submit(form);
   assert.equal(page.state.folder_id,'synthetic-updated');
   page.state.running = true; page.state.sync_status = 'running';
   await page.click(byText(page.content,'button','Refresh status'));
-  assert.equal(byText(page.content,'button','Re-sync now').disabled,true);
+  assert.equal(byText(page.content,'button','Synchronizing…').disabled,true);
   assert.equal(page.content.querySelector('form').querySelector('button').disabled,true);
 });
 
@@ -232,6 +243,9 @@ test('employee creation preserves its one-time PIN through an earlier queued dia
   const page = await dashboard('#employees');
   await page.click(byText(page.content,'button','Create employee'));
   const form = page.dialog.querySelector('form');
+  const identifierPattern = new RegExp(`^(?:${field(form, 'id').pattern})$`, 'v');
+  assert.equal(identifierPattern.test('SYN-NEW_01'), true);
+  assert.equal(identifierPattern.test('invalid identifier'), false);
   field(form,'id').value = 'SYN-NEW'; field(form,'name').value = 'Synthetic New';
   await page.submit(form);
   assert.equal(page.modal.open,true);
@@ -240,4 +254,83 @@ test('employee creation preserves its one-time PIN through an earlier queued dia
   assert.ok(text(page.dialog).includes('00000000'));
   page.modal.close();
   assert.ok(!text(page.dialog).includes('00000000'));
+});
+
+test('deactivation requires confirmation; cancel preserves access and reactivation still works', async () => {
+  const page = await dashboard('#employees');
+  const writes = () => page.calls.filter(c => c.method === 'PATCH');
+  await page.click(byText(page.content, 'button', 'Deactivate'));
+  assert.equal(writes().length, 0);
+  assert.ok(text(page.dialog).includes('Synthetic Employee (SYN-01)'));
+  assert.ok(text(page.dialog).includes('Existing sessions will end'));
+  await page.click(byText(page.dialog, 'button', 'Keep account active'));
+  assert.equal(page.modal.open, false);
+  assert.equal(writes().length, 0);
+  await page.click(byText(page.content, 'button', 'Deactivate'));
+  await page.click(byText(page.dialog, 'button', 'Deactivate account'));
+  assert.equal(page.modal.open, false);
+  assert.equal(writes()[0].url, '/api/admin/employees/SYN-01');
+  assert.equal(writes()[0].body.active, false);
+  assert.ok(text(page.content).includes('Inactive'));
+  await page.click(byText(page.content, 'button', 'Reactivate'));
+  assert.equal(writes()[1].body.active, true);
+});
+
+test('administrator minimum has a visible explanation and eligible deactivation has confirmation', async () => {
+  const page = await dashboard('#admins');
+  assert.equal(byText(page.content, 'button', 'Deactivate').disabled, true);
+  assert.ok(text(page.content).includes('Add another active administrator'));
+  assert.equal(byText(page.content, 'button', 'Deactivate').attributes['aria-describedby'], 'admin-minimum-help');
+  page.admins.push({id:'SYN-THIRD', name:'Synthetic Third', active:true});
+  await page.navigate('#admins');
+  assert.equal(byText(page.content, 'button', 'Deactivate').disabled, false);
+  await page.click(byText(page.content, 'button', 'Deactivate'));
+  assert.ok(text(page.dialog).includes('At least two active administrators must remain'));
+  await page.click(byText(page.dialog, 'button', 'Deactivate account'));
+  assert.equal(byText(page.content, 'button', 'Deactivate').disabled, true);
+});
+
+test('knowledge dates are readable and overview reports existing counts and sync health', async () => {
+  const page = await dashboard('#knowledge');
+  assert.ok(!text(page.content).includes('2026-11-07'));
+  assert.ok(text(page.content).includes('Connection verified'));
+  page.state.documents[0].modified = 'invalid';
+  await page.navigate('#knowledge');
+  assert.ok(text(page.content).includes('Date unavailable'));
+  await page.navigate('#overview');
+  for (const label of ['Active employees', 'Active administrators', 'Indexed documents', 'Unreadable files', 'Last successful sync:']) {
+    assert.ok(text(page.content).includes(label));
+  }
+  assert.equal(page.content.querySelectorAll('article').length, 4);
+  assert.ok(!text(page.content).includes('Questions this month'));
+  page.state.sync_status = 'failed';
+  await page.navigate('#overview');
+  assert.ok(text(page.content).includes('Sync needs attention'));
+});
+
+test('concise issue titles preserve the full source heading and exact quotation in details', async () => {
+  const page = await dashboard('#find-fix');
+  page.log.discrepancies[0].topic = 'Equipment inspection: Equipment inspection occurs every [value] before opening.';
+  page.log.discrepancies[0].document_a.heading = 'Inspection: daily equipment';
+  await page.navigate('#find-fix');
+  assert.ok(byText(page.content, 'p', 'Equipment inspection'));
+  assert.equal(page.content.querySelectorAll('tr').length, 2);
+  await page.click(byText(page.content, 'button', 'View details'));
+  assert.ok(text(page.dialog).includes('Inspection: daily equipment'));
+  assert.equal(page.dialog.querySelectorAll('blockquote')[0].textContent, 'Synthetic telescope calibration occurs every Monday before opening.');
+});
+
+test('a rejected deactivation stays in the dialog and leaves the account active', async () => {
+  const page = await dashboard('#employees');
+  const request = page.context.aceAuth.request;
+  page.context.aceAuth.request = async (url, method, body) => {
+    if (method === 'PATCH') throw new Error('Synthetic authorization denial.');
+    return request(url, method, body);
+  };
+  await page.click(byText(page.content, 'button', 'Deactivate'));
+  await page.click(byText(page.dialog, 'button', 'Deactivate account'));
+  assert.equal(page.modal.open, true);
+  assert.equal(page.employees[0].active, true);
+  assert.ok(text(page.dialog).includes('Synthetic authorization denial.'));
+  assert.equal(byText(page.dialog, 'button', 'Deactivate account').disabled, false);
 });

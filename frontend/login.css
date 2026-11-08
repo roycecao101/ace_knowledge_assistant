@@ -1,8 +1,15 @@
 .login-workspace { max-width: 470px; margin: 10vh auto; padding: 24px; }
 .login-card { background: white; border: 1px solid #dce5e5; border-radius: 18px; padding: 32px; box-shadow: 0 12px 40px #153b3610; }
+.login-logo { width: 200px; margin: 0 auto 24px; }
 .login-card h1 { font-size: 30px; margin: 16px 0; }
 .login-card label { display: block; margin: 20px 0; font-weight: 600; }
 .login-card input { display: block; width: 100%; margin-top: 8px; padding: 12px; border: 1px solid #bacaca; border-radius: 8px; font: inherit; }
 .login-card button { width: 100%; padding: 13px; }
 .login-error { color: #a32626; min-height: 24px; }
 .login-card a { display: inline-block; margin-top: 24px; color: #176b60; }
+@media (max-width: 480px) {
+  .login-workspace { margin: 24px auto; padding: 16px; }
+  .login-card { padding: 24px; }
+  .login-logo { width: 180px; }
+  .login-card h1 { font-size: 26px; letter-spacing: -.8px; line-height: 1.2; }
+}

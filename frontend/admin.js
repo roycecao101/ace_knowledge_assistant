@@ -92,6 +92,9 @@ function panel(title, description = "", action) {
 }
 function renderTable(caption, columns, rows) {
   const scroll = el("div", "table-scroll");
+  scroll.tabIndex = 0;
+  scroll.setAttribute("role", "region");
+  scroll.setAttribute("aria-label", `${caption}. Scroll horizontally to see all columns.`);
   const table = el("table");
   table.append(el("caption", "", caption));
   const head = el("thead");
@@ -112,9 +115,28 @@ function renderTable(caption, columns, rows) {
 }
 function renderCards(items) {
   const grid = el("div", "cards");
-  items.forEach(([label, value, note]) => {
+  items.forEach(([label, value, note, icon]) => {
     const card = el("article", "card");
-    card.append(el("div", "card-label", label), el("div", "card-value", value), el("div", "card-note", note));
+    const heading = el("div", "card-heading");
+    heading.append(el("div", "card-label", label));
+    if (icon) {
+      const symbol = el("span", `card-icon metric-${icon}`);
+      symbol.setAttribute("aria-hidden", "true");
+      const paths = {
+        employees: "M9 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6m3 11v-3a6 6 0 0 0-2-4",
+        admins: "m12 3 8 3v6c0 4-5 8-8 9-3-1-8-5-8-9V6ZM8 12l3 3 5-6",
+        documents: "M6 3h8l4 4v14H6ZM14 3v5h4M9 12h6m-6 4h6",
+        warning: "m12 3 10 18H2ZM12 9v5m0 3v1",
+      };
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "1.7");
+      svg.setAttribute("stroke-linejoin", "round"); svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("focusable", "false");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", paths[icon] || paths.documents); svg.append(path); symbol.append(svg); heading.append(symbol);
+    }
+    card.append(heading, el("div", "card-value", value), el("div", "card-note", note));
     grid.append(card);
   });
   return grid;
@@ -125,8 +147,43 @@ let dialogCleanup = () => {};
 function renderDialog(title, children, cleanup = () => {}) {
   dialogCleanup(); dialogCleanup = cleanup;
   const heading = el("h2", "", title); heading.id = "dialog-title";
-  dialogContent.replaceChildren(heading, ...children);
+  heading.tabIndex = -1;
+  const top = el("div", "dialog-heading");
+  const dismiss = button("×", () => modal.close(), "dialog-dismiss");
+  dismiss.setAttribute("aria-label", "Close dialog");
+  top.append(heading, dismiss);
+  dialogContent.replaceChildren(top, ...children);
   modal.showModal();
+  heading.focus({preventScroll: true});
+  modal.scrollTop = 0;
+}
+
+// Display-only formatting. Quotation and citation strings are never rewritten.
+function localDate(value, fallback = "Never") {
+  if (!value) return fallback;
+  const dateOnly = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const parsed = dateOnly ? new Date(...value.split("-").map((n, i) => Number(n) - (i === 1 ? 1 : 0)))
+    : new Date(typeof value === "number" ? value * 1000 : value);
+  if (Number.isNaN(parsed.getTime())) return "Date unavailable";
+  return parsed.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric",
+    ...(dateOnly ? {} : { hour: "numeric", minute: "2-digit", timeZoneName: "short" }) });
+}
+
+function reviewWorkflow() {
+  const list = el("ol", "review-workflow");
+  [["Compare the sources", "Read both exact quotations, their context, and applicable offices."],
+    ["Confirm with a manager", "The appropriate manager decides which policy applies."],
+    ["Correct and re-sync", "Update the authorized source in Google Drive, then re-sync. The log updates after analysis."]]
+    .forEach(([title, copy]) => {
+      const item = el("li"); item.append(el("strong", "", title), document.createTextNode(copy)); list.append(item);
+    });
+  return list;
+}
+
+function policyTitle(topic) {
+  // The analyzer supplies a heading followed by a detailed comparison signature.
+  // Keep the heading as the row title; source evidence is always shown verbatim.
+  return (topic || "Policy issue").split(/:\s+/, 1)[0];
 }
 modal.addEventListener("close", () => {
   // A queued close event from the account form must not clear a new PIN dialog.
@@ -206,20 +263,17 @@ function startPreview() {
     knowledge() { renderers.sync(); renderers.documents(); renderers.settings(); },
     overview() {
       content.append(renderCards([
-        ["Active employees", String(data.employees.filter(e => e.active).length), "Across all three offices · sample data"],
-        ["Indexed documents", String(data.documents.length), "Readable documents in the sample index"],
-        ["Offices", String(data.offices.length), "ALP · NOR · LIL/ADC"],
-        ["Questions this month", "1,248", "Ace-wide aggregate · fictional"],
+        ["Active employees", String(data.employees.filter(e => e.active).length), "Enabled sample accounts", "employees"],
+        ["Active administrators", String(data.admins.filter(a => a.active).length), "At least two must remain", "admins"],
+        ["Indexed documents", String(data.documents.length), "Readable sample documents", "documents"],
+        ["Unreadable files", "2", "Sample files excluded from search", "warning"],
       ]));
       renderStatus("Latest sync attempt failed at 08:00 EST: Google Drive connection expired. The last successful index remains available. Review synchronization before retrying.", "error", content.appendChild(el("div")));
-      const grid = el("div", "two-columns");
       const sync = panel("Knowledge health", "Keep the team connected to current source material.", button("Review sync", () => { location.hash = "knowledge"; }));
       const dl = el("dl");
       [["Last successful synchronization", lastSync], ["Current synchronization status", "Failed · attention required"], ["Unreadable files", "2 sample files need review"]].forEach(([k,v]) => dl.append(el("dt", "", k), el("dd", "", v)));
       sync.append(dl);
-      const usage = panel("Ace-wide usage", "Aggregate totals only · fictional reporting period: November 2026");
-      usage.append(renderTable("No employee-level analytics or question text", ["Metric", "Total"], [["Searches", "1,248"], ["Source-backed answers", "1,096"], ["Unresolved searches", "152"], ["Paid AI questions today", "84 / 300"]]));
-      grid.append(sync, usage); content.append(grid);
+      content.append(sync);
       content.append(panel("Find & Fix Log", "Review potential policy discrepancies after synchronization.", button("Open Find & Fix Log", () => { location.hash = "find-fix"; }, "primary")));
     },
     employees() {

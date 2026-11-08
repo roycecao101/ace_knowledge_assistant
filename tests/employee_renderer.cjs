@@ -26,9 +26,9 @@ function inspectRender(data) {
   const card = nodes.get('#results').children[0];
   const quotes = card.children.filter(child => child.className === 'quote');
   const sourceMatches = quotes.every((quote, i) => {
-    const source = quote.children[1];
+    const source = quote.children.find(node => node.className === 'source');
     const result = data.results[i];
-    return quote.children[0].textContent === result.quote &&
+    return quote.children.find(node => node.tag === 'blockquote').textContent === result.quote &&
       source.children.some(node => node.textContent === result.filename) &&
       source.children.some(node => node.textContent === result.office) &&
       source.children.some(node => node.textContent === result.heading || node.textContent === `Page ${result.page}`);
