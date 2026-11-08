@@ -1,0 +1,3 @@
+[tool.vercel]
+# Use the deployment wrapper, including its safe startup diagnostics.
+entrypoint = "main:app"

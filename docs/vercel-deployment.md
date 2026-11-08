@@ -13,7 +13,7 @@ or a Vercel build. Only existing dependency deprecation warnings were observed.
 
 | Area | Finding and resolution |
 | --- | --- |
-| Entrypoint | `backend.serve` starts Uvicorn, which Vercel must not run. Root `main.py` exports the same FastAPI `app` as ASGI. Vercel supports this filename and lifespan events. |
+| Entrypoint | `backend.serve` starts Uvicorn, which Vercel must not run. Root `main.py` exports the same FastAPI `app` as ASGI. `pyproject.toml` explicitly selects `main:app` because automatic detection does not recognize the import inside the wrapper's `try` block. Vercel supports lifespan events. |
 | Frontend | HTML and assets are served by existing FastAPI routes. The bundle explicitly includes `frontend/**`. No static hosting rewrite, `public/` copy, CDN promotion override, or CORS change is used. `/index.html` and `/admin.html` retain session/role checks; both login pages remain available. |
 | Database | Internal Render hosts cannot be reached from Vercel. Use the complete external Render hostname with certificate-verified TLS. Missing DB configuration and SQLite fail closed. Pool size is one plus one overflow per instance on Vercel; scaling still needs a connection budget. |
 | Filesystem | Documents download into memory; parsing uses byte streams. Accounts, sessions, OAuth state, encrypted refresh tokens, document index, Find & Fix Log, and sync counters remain in PostgreSQL. No persistent function filesystem writes are introduced. Python/dependency caches are ephemeral and must never be relied on. |
@@ -89,6 +89,11 @@ document bytes are not uploaded through these API routes.
    and secret storage. Never paste connection URLs into issues, commits or logs.
 
 ## Production environment variables
+
+If logs report `FASTAPI_ENTRYPOINT_NOT_FOUND`, ensure the repository-root
+`pyproject.toml` is included with `[tool.vercel]` and `entrypoint = "main:app"`.
+Keep this pointed at the root wrapper so its startup checks and safe diagnostics
+run. Commit and push the configuration, then deploy the updated commit.
 
 If logs report `could not import "main.py"`, read the final exception line.
 The entrypoint now reports the exception class and any missing required Vercel
